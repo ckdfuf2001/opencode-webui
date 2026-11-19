@@ -999,6 +999,9 @@ export default function OleAttachmentOverlay({
   posMapRef.current = posMap
   const entriesRef = useRef(entries)
   entriesRef.current = entries
+  // C7n: lib 중복 도형 숨김 추적 (같은 파트를 lib+오버레이가 둘 다 그리면 lib 쪽을
+  // visibility:hidden — 레이아웃 유지 + 히트테스트 제외. 매칭된 것만 숨긴다).
+  const hiddenLibElsRef = useRef<Set<Element>>(new Set())
   // C6b: 최신 openOrDownload 거울 (아래 early return보다 먼저 선언해야 한다 —
   // 조건부 훅이 되면 React #310으로 깨진다).
   const openRef = useRef<((entry: OleEmbeddingRef) => void) | null>(null)
@@ -1048,8 +1051,11 @@ export default function OleAttachmentOverlay({
         // (report가 report-final 도형을 가로채는 오매칭 방지.)
         const extraParts = new Set((extrasRef.current ?? []).map((ex) => ex.part))
         const claimed = new Set<Element>()
+        // C7n: 파트별 매칭된 lib 요소 (중복 렌더 숨김용).
+        const claimedByPart = new Map<string, Element>()
         const assign = (entry: OleEmbeddingRef, hit: { el: Element; unsupported: boolean }): void => {
           claimed.add(hit.el)
+          claimedByPart.set(entry.partName, hit.el)
           // C7j-2: lib 네이티브 아이콘을 우리 미리보기로 교체 (리사이즈·선택은 lib 그대로).
           if (parentPath) {
             try {
@@ -1134,6 +1140,33 @@ export default function OleAttachmentOverlay({
           }
         }
 
+        // C7n: lib 도형과 우리 img가 같은 파트를 그리면 lib 쪽을 숨긴다 (중복 방지).
+        // 매칭된 것만 숨긴다 (모르는 lib 요소는 건드리지 않음). cover는 제외
+        // (커버 카드가 플레이스홀더를 덮는 설계 그대로).
+        // pptx는 lib-only라 우리 img를 그리지 않으므로 숨길 것도 없다.
+        {
+          const wantHidden = new Set<Element>()
+          if ((anchor === 'xlsx' || anchor === 'docx') && parentPath) {
+            for (const entry of entries) {
+              const p = next[entry.partName]
+              if (!p || !p.libClaimed || p.cover) continue
+              const el = claimedByPart.get(entry.partName)
+              if (el && (el as HTMLElement).isConnected !== false) wantHidden.add(el)
+            }
+          }
+          try {
+            for (const el of hiddenLibElsRef.current) {
+              if (!wantHidden.has(el)) (el as HTMLElement).style.visibility = ''
+            }
+            for (const el of wantHidden) {
+              if (!hiddenLibElsRef.current.has(el)) (el as HTMLElement).style.visibility = 'hidden'
+            }
+          } catch {
+            /* 무시 */
+          }
+          hiddenLibElsRef.current = wantHidden
+        }
+
         // C7m 1-b: 동일값이면 이전 객체 유지 (D35 유휴 렌더 0회).
         setPosMap((prev) => mergePosMap(prev, next))
       } catch {
@@ -1154,6 +1187,13 @@ export default function OleAttachmentOverlay({
     return () => {
       dead = true
       stopDeep()
+      // C7n: 숨긴 lib 중복을 원복한다 (언마운트·재계산 시 잔상 방지).
+      try {
+        for (const el of hiddenLibElsRef.current) (el as HTMLElement).style.visibility = ''
+      } catch {
+        /* 무시 */
+      }
+      hiddenLibElsRef.current = new Set()
       try {
         container.removeEventListener('scroll', onScroll, { capture: true })
       } catch {
