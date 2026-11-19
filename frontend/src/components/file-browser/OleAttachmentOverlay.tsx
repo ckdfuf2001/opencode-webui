@@ -451,8 +451,12 @@ function resolveExtraPos(
       const st = typeof cells.scrollTop === 'number' ? cells.scrollTop : 0
       const x = Math.round(gr.left - c.left + ex.pos.col * cellW - sl)
       const y = Math.round(gr.top - c.top + ex.pos.row * cellH - st)
-      const w = Math.round(cellW * 1.5)
-      const h = Math.round(cellH * 2.5)
+      // C7n-resize: 저장된 크기가 있으면 그대로 쓰고, 없으면 기본 1.5x2.5셀.
+      // C7n-icon: 표시 최소 96x48 (작게 보여서 옮기기/잡기 어렵다는 보고 대응).
+      const wCells = typeof ex.pos.w === 'number' && ex.pos.w > 0 ? ex.pos.w : 1.5
+      const hCells = typeof ex.pos.h === 'number' && ex.pos.h > 0 ? ex.pos.h : 2.5
+      const w = Math.max(96, Math.round(cellW * wCells))
+      const h = Math.max(48, Math.round(cellH * hCells))
       if (x + w < 0 || y + h < 0 || x > c.width || y > c.height) return null
       return { x, y, w, h, cover: false, captionAbove: above(y, h) }
     }
@@ -800,8 +804,10 @@ function PptxImgEntry({
 }
 
 /** C7n: xlsx/docx 첨부 미리보기 아이콘 (ppt PptxImgEntry와 같은 외형).
- * - 96x48 미리보기 img를 앵커 중앙에 둔다 (lib 자리가 작거나 없어도 동일 크기).
+ * - pos 크기 그대로 렌더한다 (xlsx 앵커 셀 기반; docx는 96x48 고정).
+ *   lib 자리가 작거나 없어도 pos 크기로 보인다.
  * - 드래그 이동: 5px 이상 움직이면 onMove(part, clientX/clientY) (오버레이가 셀/블록으로 변환).
+ * - 모서리 드래그 리사이즈 (xlsx만): onResize(part, clientX/clientY) → to 셀로 변환.
  * - 한 번 클릭은 선택, 더블클릭은 열기, 선택 시 다운로드 버튼.
  */
 function XlsxDocxImgEntry({
@@ -809,6 +815,8 @@ function XlsxDocxImgEntry({
   pos,
   iconUrl,
   onMove,
+  onResize,
+  resizable,
   onDownloadFile,
   onOpen,
   selected,
@@ -818,22 +826,37 @@ function XlsxDocxImgEntry({
   pos: { x: number; y: number; w: number; h: number }
   iconUrl: string
   onMove?: (part: string, to: { clientX: number; clientY: number }) => void
+  onResize?: (part: string, to: { clientX: number; clientY: number }) => void
+  resizable?: boolean
   onDownloadFile: (entry: OleEmbeddingRef) => void
   onOpen: (entry: OleEmbeddingRef) => void
   selected: boolean
   onSelect: (part: string | null) => void
 }): React.ReactNode {
   const dragRef = useRef<{ sx: number; sy: number; moved: boolean } | null>(null)
+  const resizeRef = useRef<{ sx: number; sy: number; moved: boolean } | null>(null)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
-  const W = 96
-  const H = 48
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  // pos 크기를 그대로 쓴다 (리사이즈 중에는 드래그 크기로 미리보기).
+  const W = Math.max(24, Math.round(size?.w ?? pos.w))
+  const H = Math.max(24, Math.round(size?.h ?? pos.h))
   useEffect(() => {
     const onUp = (e: PointerEvent): void => {
       const d = dragRef.current
+      const r = resizeRef.current
       const box = boxRef.current
       dragRef.current = null
+      resizeRef.current = null
       setDrag(null)
+      if (r) {
+        const moved = r.moved || Math.hypot(e.clientX - r.sx, e.clientY - r.sy) >= 5
+        setSize(null)
+        if (moved && onResize) {
+          try { onResize(entry.partName, { clientX: e.clientX, clientY: e.clientY }) } catch { /* 무시 */ }
+        }
+        return
+      }
       if (!d || !box) return
       try {
         const dx = e.clientX - d.sx
@@ -854,6 +877,12 @@ function XlsxDocxImgEntry({
         if (Math.hypot(dx, dy) >= 5) dragRef.current.moved = true
         setDrag({ dx, dy })
       }
+      if (resizeRef.current) {
+        const dx = e.clientX - resizeRef.current.sx
+        const dy = e.clientY - resizeRef.current.sy
+        if (Math.hypot(dx, dy) >= 5) resizeRef.current.moved = true
+        setSize({ w: Math.max(24, pos.w + dx), h: Math.max(24, pos.h + dy) })
+      }
     }
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointermove', onMoveWin)
@@ -861,9 +890,11 @@ function XlsxDocxImgEntry({
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointermove', onMoveWin)
     }
-  }, [entry, onMove, onSelect])
-  const cx = pos.x + pos.w / 2 + (drag?.dx ?? 0)
-  const cy = pos.y + pos.h / 2 + (drag?.dy ?? 0)
+  }, [entry, onMove, onResize, onSelect, pos.w, pos.h])
+  // 앵커 좌상단 기준 배치 (리사이즈해도 좌상이 고정 — 셀 앵커 의미 유지).
+  // W==pos.w이면 기존 중앙 배치와 동일 위치이다.
+  const lx = Math.max(0, pos.x + (drag?.dx ?? 0))
+  const ly = Math.max(0, pos.y + (drag?.dy ?? 0))
   return (
     // C7n: 구 칩과 같은 <button> (getByRole 접근성 계약 유지 — divだと AX에서 안 보임).
     <button
@@ -872,7 +903,7 @@ function XlsxDocxImgEntry({
       data-testid="ole-icon"
       title={entry.displayName ?? entry.fallbackName}
       aria-label={`첨부 ${entry.displayName ?? entry.fallbackName}`}
-      style={{ position: 'absolute', left: Math.max(0, cx - W / 2), top: Math.max(0, cy - H / 2), width: W, height: H, zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2, background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit' }}
+      style={{ position: 'absolute', left: lx, top: ly, width: W, height: H, zIndex: 30, touchAction: 'none', cursor: 'move', outline: selected ? '2px solid #2563eb' : 'none', outlineOffset: 2, background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit' }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.preventDefault()
@@ -920,6 +951,19 @@ function XlsxDocxImgEntry({
           <Download className="h-3.5 w-3.5" />
         </button>
       )}
+      {selected && resizable && onResize && (
+        <div
+          data-testid="ole-resize"
+          title="크기 조절"
+          style={{ position: 'absolute', right: -6, bottom: -6, width: 14, height: 14, cursor: 'nwse-resize', background: '#fff', border: '1px solid #94a3b8', borderRadius: 3, zIndex: 32 }}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return
+            e.preventDefault()
+            e.stopPropagation()
+            resizeRef.current = { sx: e.clientX, sy: e.clientY, moved: false }
+          }}
+        />
+      )}
     </button>
   )
 }
@@ -932,6 +976,7 @@ export default function OleAttachmentOverlay({
   getExtraContext,
   onMoveEmbed,
   onResizeEmbed,
+  onResizeCell,
   selectedPart: selectedPartProp,
   onSelectPart: onSelectPartProp,
   peerSelections: peerSelectionsProp,
@@ -947,6 +992,8 @@ export default function OleAttachmentOverlay({
   /** C7e: pptx 도형 이동/리사이즈 (fractions). C7n: xlsx 셀·docx 블록 이동도 같은 prop. */
   onMoveEmbed?: (part: string, pos: { x?: number; y?: number; sheet?: number; col?: number; row?: number; block?: number; blockText?: string }) => void
   onResizeEmbed?: (part: string, size: { w: number; h: number }) => void
+  /** C7n-resize: xlsx 모서리 드래그 → to 셀 (서버가 from은 유지하고 to만 바꾼다). */
+  onResizeCell?: (part: string, to: { toCol: number; toRow: number }) => void
   /** C7f: 선택 상태 (PptxViewer 제어; 없으면 내부 상태). */
   selectedPart?: string | null
   onSelectPart?: (part: string | null) => void
@@ -1067,15 +1114,19 @@ export default function OleAttachmentOverlay({
           }
           const r = hit.el.getBoundingClientRect()
           const y = Math.max(0, Math.round(r.top - c.top))
-          const h = Math.max(0, Math.round(r.height))
+          // C7n-icon: lib 도형이 작아도 미리보기는 96x48 이상으로 (xlsx/docx 한정).
+          const rw = Math.max(0, Math.round(r.width))
+          const rh = Math.max(0, Math.round(r.height))
+          const dw = anchor === 'pptx' ? rw : Math.max(96, rw)
+          const dh = anchor === 'pptx' ? rh : Math.max(48, rh)
           next[entry.partName] = {
             x: Math.max(0, Math.round(r.left - c.left)),
             y,
-            w: Math.max(0, Math.round(r.width)),
-            h,
+            w: dw,
+            h: dh,
             // lib가 렌더를 포기한 자리(xg-obj-unsupported)는 카드로 덮는다.
             cover: hit.unsupported,
-            captionAbove: y + h + CAPTION_H > c.height && y - CAPTION_H >= 0,
+            captionAbove: y + dh + CAPTION_H > c.height && y - CAPTION_H >= 0,
             // C7m: lib 도형에서 위치를 잡았으면 lib-only 표시 대상이다.
             libClaimed: true,
           }
@@ -1537,6 +1588,20 @@ export default function OleAttachmentOverlay({
     }
   };
 
+  // C7n-resize: 모서리 드롭 지점을 to 셀로 변환한다 (from은 서버가 유지).
+  const handleImgResize = (part: string, clientX: number, clientY: number): void => {
+    try {
+      const container = rootRef.current?.parentElement as HTMLElement | null
+      if (!container || !onResizeCell) return
+      if (anchor !== 'xlsx') return
+      const hit = xlsxCellAt(container, clientX, clientY)
+      if (!hit) return
+      onResizeCell(part, { toCol: hit.col, toRow: hit.row })
+    } catch {
+      /* 무시 */
+    }
+  };
+
   // 아이콘 바로 아래 가운데 정렬 파일명 라벨 (표시 전용 — 클릭을 막지 않는다).
   // dblclick은 컨테이너 캡처가 잡는다: rect 아래쪽 패딩 + 실측 박스.
   // 아래에 안 들어가면 위로 뒤집는다 (컨테이너 밖으로 나가면 캡처가 못 받는다).
@@ -1720,6 +1785,8 @@ export default function OleAttachmentOverlay({
                 pos={pos}
                 iconUrl={iconUrlX}
                 onMove={onMoveEmbed ? (_part, to) => handleImgDrop(e.partName, to.clientX, to.clientY) : undefined}
+                onResize={onResizeCell ? (_part, to) => handleImgResize(e.partName, to.clientX, to.clientY) : undefined}
+                resizable={anchor === 'xlsx'}
                 onDownloadFile={(en) => void download(en)}
                 onOpen={(en) => void openOrDownload(en)}
                 selected={selectedPart === e.partName}

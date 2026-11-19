@@ -2488,7 +2488,7 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
     }
   })
 
-  test('D24-xlsx: 종류별 미리보기 아이콘이 통일된다 (ppt와 같은 96x48)', async ({
+  test('D24-xlsx: 종류별 미리보기 아이콘이 통일된다 (앵커 크기 반영)', async ({
     browser,
   }, testInfo) => {
     testInfo.setTimeout(420000)
@@ -2522,7 +2522,7 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
           }, { timeout: 60000, intervals: [1000] })
           .toBe(true)
       }
-      // C7n: 종류별 뱃지 대신 ppt와 같은 미리보기 아이콘 (96x48 고정, 종류별 PNG).
+      // C7n: 종류별 뱃지 대신 앵커 크기 기반 미리보기 아이콘 (C7n-resize: 리사이즈 반영).
       for (const nm of ['kind-doc.docx', 'kind-sheet.xlsx', 'kind-deck.pptx']) {
         await expect
           .poll(() => t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
@@ -2531,14 +2531,15 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
             const img = hit.querySelector('img[data-testid="ole-img"]') as HTMLImageElement | null
             if (!img) return null
             const r = (hit as HTMLElement).getBoundingClientRect()
-            if (Math.round(r.width) !== 96 || Math.round(r.height) !== 48) return null
+            // 앵커 기반 크기 (0보다 크고, 터무니없이 크지 않음).
+            if (r.width < 24 || r.height < 12 || r.width > 800 || r.height > 600) return null
             // 종류별 미리보기 PNG가 로드됐는지 (natural 크기 확인).
             if (!(img.naturalWidth >= 96 && img.naturalHeight >= 48)) return null
             return `${Math.round(r.width)}x${Math.round(r.height)}:${img.naturalWidth}x${img.naturalHeight}`
           }, nm), { timeout: 30000, intervals: [1000] })
           .not.toBeNull()
       }
-      console.log('[c6d] D24 preview icons unified (96x48)')
+      console.log('[c6d] D24 preview icons unified (anchor-sized)')
     } finally {
       await t.ctxA.close().catch(() => {})
       await t.ctxB.close().catch(() => {})
@@ -2862,7 +2863,15 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       }
       await expect.poll(anchorBox, { timeout: 30000, intervals: [1000] }).not.toBeNull()
       const before = (await anchorBox())!
-      // 칩 선택 후 모서리 핸들을 드래그한다 (RED: 현재 리사이즈 핸들이 없어 실패).
+      // 칩을 클릭해 선택한 뒤 모서리 핸들을 드래그한다.
+      const chipCenter = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)]
+      }, 'sizemove.xlsx')
+      expect(chipCenter, 'chip center').not.toBeNull()
+      await t.pageA.mouse.click(chipCenter![0], chipCenter![1])
       const chip = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
         const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
         if (!hit) return null
@@ -2874,8 +2883,44 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       expect(chip, 'resize handle').not.toBeNull()
       await t.pageA.mouse.move(chip![0], chip![1])
       await t.pageA.mouse.down()
-      await t.pageA.mouse.move(chip![0] + 150, chip![1] + 100, { steps: 15 })
+      // 드롭 목표를 디스크 앵커 기준으로 계산한다 (to+3칸 — 셀 스냅에 강건).
+      const drop = await t.pageA.evaluate((want: { toCol: number; toRow: number }) => {
+        const ed = document.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
+        const sr = ed?.shadowRoot
+        if (!sr) return null
+        const cells = (sr as unknown as Element).querySelector('.xg-cells') as unknown as { getBoundingClientRect: () => DOMRect; scrollLeft?: number; scrollTop?: number; querySelector: (s: string) => Element | null } | null
+        if (!cells) return null
+        const gr = cells.getBoundingClientRect()
+        let cellW = 64
+        let cellH = 20
+        try {
+          const sample = cells.querySelector('.xg-c') as unknown as { getBoundingClientRect: () => DOMRect } | null
+          if (sample) {
+            const r = sample.getBoundingClientRect()
+            if (r.width > 4 && r.height > 4) { cellW = r.width; cellH = r.height }
+          }
+        } catch { /* 무시 */ }
+        const sl = typeof cells.scrollLeft === 'number' ? cells.scrollLeft : 0
+        const st = typeof cells.scrollTop === 'number' ? cells.scrollTop : 0
+        const tx = Math.round(gr.left + (want.toCol + 3) * cellW - sl)
+        const ty = Math.round(gr.top + (want.toRow + 3) * cellH - st)
+        return [tx, ty]
+      }, { toCol: before[2], toRow: before[3] })
+      expect(drop, 'drop target').not.toBeNull()
+      await t.pageA.mouse.move(drop![0], drop![1], { steps: 20 })
       await t.pageA.mouse.up()
+      // 먼저 화면 칩이 커졌는지 확인 (106 수신 + 오버레이 반영 증명).
+      await expect
+        .poll(async () => {
+          const b = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+            const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+            if (!hit) return null
+            const r = hit.getBoundingClientRect()
+            return [Math.round(r.width), Math.round(r.height)]
+          }, 'sizemove.xlsx')
+          return b === null ? 0 : b[0] * b[1]
+        }, { timeout: 30000, intervals: [1000] })
+        .toBeGreaterThan(96 * 48)
       // to 셀이 오른쪽·아래로 늘어난다.
       await expect
         .poll(async () => {

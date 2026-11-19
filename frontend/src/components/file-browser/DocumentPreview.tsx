@@ -2561,16 +2561,16 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
   const [partChangePending, setPartChangePending] = useState(false)
   // C7: 백그라운드 삽입 칩 (리로드 없이 명시 위치에 표시).
   const [embedExtras, setEmbedExtras] = useState<
-    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { sheet?: number; col?: number; row?: number; block?: number; text?: string } }>
+    Array<{ part: string; name: string; kind: 'pptx' | 'xlsx' | 'docx'; pos: { sheet?: number; col?: number; row?: number; w?: number; h?: number; block?: number; text?: string } }>
   >([])
   /** C7: 106/삽입응답 적용 — 칩 추가(멱등) + baseHash 갱신. C7n: 이동 106이면 위치도 갱신. */
   const applyXlsxEmbedAdded = useCallback(
-    (msg: { part: string; name: string; newHash: string; pos: { sheet?: number; col?: number; row?: number } }) => {
+    (msg: { part: string; name: string; newHash: string; pos: { sheet?: number; col?: number; row?: number; w?: number; h?: number } }) => {
       setEmbedExtras((prev) => {
         const i = prev.findIndex((e) => e.part === msg.part)
         if (i < 0) return [...prev, { part: msg.part, name: msg.name, kind: 'xlsx' as const, pos: msg.pos }]
         const cur = prev[i]!
-        if (cur.pos.sheet === msg.pos.sheet && cur.pos.col === msg.pos.col && cur.pos.row === msg.pos.row) return prev
+        if (cur.pos.sheet === msg.pos.sheet && cur.pos.col === msg.pos.col && cur.pos.row === msg.pos.row && cur.pos.w === msg.pos.w && cur.pos.h === msg.pos.h) return prev
         const next = prev.slice()
         next[i] = {
           ...cur,
@@ -2578,6 +2578,8 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
             sheet: msg.pos.sheet ?? cur.pos.sheet,
             col: msg.pos.col ?? cur.pos.col,
             row: msg.pos.row ?? cur.pos.row,
+            w: msg.pos.w ?? cur.pos.w,
+            h: msg.pos.h ?? cur.pos.h,
           },
         }
         return next
@@ -2592,18 +2594,18 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
     [],
   )
   // C7n: xlsx 첨부 드래그 이동 (PUT /embed/pos 셀 + 106 전파).
-  const moveXlsxEmbed = useCallback(async (part: string, dest: { sheet?: number; col: number; row: number }): Promise<void> => {
+  const moveXlsxEmbed = useCallback(async (part: string, dest: { sheet?: number; col?: number; row?: number; toCol?: number; toRow?: number }): Promise<void> => {
     try {
       const c = collabRef.current
-      const r = await putEmbedPos({ hostPath: path, part, roomId: c?.roomId, clientId: selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, baseHash: c?.baseHash ?? etag ?? undefined, sheet: dest.sheet, col: dest.col, row: dest.row })
+      const r = await putEmbedPos({ hostPath: path, part, roomId: c?.roomId, clientId: selfClientIdRef.current ?? XLSX_SAVE_CLIENT_ID, baseHash: c?.baseHash ?? etag ?? undefined, sheet: dest.sheet, col: dest.col, row: dest.row, toCol: dest.toCol, toRow: dest.toRow })
       if (!r.ok || !r.newHash) {
         showToast.error(r.error ?? '이동 실패')
         return
       }
       if (c) c.baseHash = r.newHash
       setEtag(r.newHash)
-      const rp = (r.pos ?? {}) as { sheet?: number; col?: number; row?: number }
-      applyXlsxEmbedAdded({ part, name: part.split('/').pop() ?? part, newHash: r.newHash, pos: { sheet: rp.sheet ?? dest.sheet, col: rp.col ?? dest.col, row: rp.row ?? dest.row } })
+      const rp = (r.pos ?? {}) as { sheet?: number; col?: number; row?: number; w?: number; h?: number }
+      applyXlsxEmbedAdded({ part, name: part.split('/').pop() ?? part, newHash: r.newHash, pos: { sheet: rp.sheet ?? dest.sheet, col: rp.col ?? dest.col, row: rp.row ?? dest.row, ...(typeof rp.w === 'number' ? { w: rp.w } : {}), ...(typeof rp.h === 'number' ? { h: rp.h } : {}) } })
     } catch {
       showToast.error('이동 실패')
     }
@@ -4820,11 +4822,12 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         waitSeed: () => waitCollabSeed(() => collabRef.current?.joined === true),
         reload: () => onReloadFileRef.current?.(),
         onInserted: (rec) => {
+          const rp = (rec.pos ?? {}) as { sheet?: number; col?: number; row?: number; w?: number; h?: number }
           applyXlsxEmbedAdded({
             part: rec.part,
             name: rec.name,
             newHash: rec.newHash,
-            pos: { sheet: objActiveSheetRef.current, col: cell.col, row: cell.row },
+            pos: { sheet: objActiveSheetRef.current, col: cell.col, row: cell.row, ...(typeof rp.w === 'number' ? { w: rp.w } : {}), ...(typeof rp.h === 'number' ? { h: rp.h } : {}) },
           })
         },
       })
@@ -4892,6 +4895,7 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
         extras={embedExtras}
         getExtraContext={() => ({ sheet: objActiveSheetRef.current })}
         onMoveEmbed={(part, pos) => { if (typeof pos.col === 'number' && typeof pos.row === 'number') void moveXlsxEmbed(part, { sheet: pos.sheet, col: pos.col, row: pos.row }) }}
+        onResizeCell={(part, to) => { void moveXlsxEmbed(part, { toCol: to.toCol, toRow: to.toRow }) }}
         selectedPart={xlsxSelected}
         onSelectPart={(p) => publishXlsxSelect(p)}
         peerSelections={xlsxPeerSel}
