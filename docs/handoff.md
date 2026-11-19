@@ -1525,3 +1525,22 @@ E21만의 문제가 아니다. 근거:
   (우리 캡션·버튼은 없음이 정상.)
 - Retry 버튼 1클릭 → 최대 3회 자동 재시도 (예산, boundary seq 키로 자식 리마운트).
   xlsx 크래시 진단용 component stack 표시 추가 (에러 화면 펼침 + 콘솔 미러).
+
+## C7n xlsx/docx 미리보기+이동 (2026-11-19, D73)
+- 사용자 보고: doc/docx/xlsx 첨부가 옮겨지지 않고 아이콘이 너무 작음 (스크린샷).
+  사용자 결정: ppt와 동일한 미리보기 + 이동 풀구현.
+- 구현: XlsxDocxImgEntry 96x48 고정 미리보기 (lib 자리 없어도 표시, 드래그 가능).
+  서버 moveXlsxEmbed (DRAW 앵커 셀 재기록) + moveDocxEmbed (w:object 문단 이동,
+  텍스트 우선 매칭) + PUT /embed/pos 3종 확장 + 106 방송 (pos 갱신).
+  resolveExtraPos docx는 보이는 문단만 본다 (deep collect + 비제로 rect —
+  lib가 rect 0인 측정용 <p>를 섞어 둠).
+- 검증: D26(xlsx 드래그→디스크 DRAW 변경) + D27(docx 드래그→w:object 이동,
+  텍스트 매칭으로 디스크 위치 확정) green (chromium+msedge).
+  회귀: D22/D23(img 칩 클릭 분리용 C7k 간격 확대), D24(뱃지→미리보기 단언),
+  D18(드래그 시작점 앵커 원점), P2 전종(존재 단언), E1-docx(허용오차 5px),
+  K-dbl-xlsx green. backend unit move* 5건 green.
+- 범위 밖 (선행 실패, C7n 무관): K-dbl pptx/docx/nosubtle/nested (lib 프레임·
+  리셋 레이스, C7 빨간불), c5-3 E1-cover-long/E2류 (앵커 없는 직접 zip 삽입은
+  C7d-1과 충돌 — 별도 트랙 필요), c5-4 U-parent, D1/D3 등 베이스 실패군.
+- PC 2대 확인 항목 (C7n exe): xlsx/docx 첨부가 96x48 미리보기로 보이고,
+  드래그로 이동 가능 (이동 후 상대 화면에 바로 반영). pptx는 C7m과 동일.

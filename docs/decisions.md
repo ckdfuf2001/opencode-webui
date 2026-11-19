@@ -1021,3 +1021,23 @@
   재시도가 동작한다. 성공 유예 8초 안에 에러가 없으면 예산 회수 (늦은 무관 에러는
   자동 재시도 안 함). 에러 화면에 component stack 펼침 + 콘솔 미러를 둬서
   다음 크래시부터 발생 컴포넌트가 바로 보이게 했다.
+
+## D73 C7n xlsx/docx 첨부는 ppt와 같은 미리보기 + 드래그 이동 (2026-11-19)
+- 배경: docx·xlsx 첨부는 옮길 수 없고 칩이 너무 작다는 사용자 보고.
+  원인은 (1) 작은 뱃지 칩만 표시, (2) PUT /embed/pos가 pptx 전용이라 이동 불가.
+- 결정(1): xlsx/docx 앵커분도 ppt와 같은 96x48 미리보기 이미지로 표시한다
+  (lib 자리가 작거나 없어도 고정 크기, 가운데 정렬, 드래그 가능).
+- 결정(2): 서버에 moveXlsxEmbed/moveDocxEmbed를 추가하고 PUT /embed/pos를
+  3종 호스트로 확장한다 (xlsx 셀 / docx 블록, dirty_room·view_only 가드 동일).
+  docx는 텍스트 우선 매칭 (서버 disk 블록 인덱스와 클라이언트 lib 문단 순서가
+  다를 수 있어 텍스트 힌트가 정합성을 보장한다).
+- 결정(3): docx resolveExtraPos는 보이는 문단만 본다 (deep collect + 비제로 rect).
+  lib는 rect 0인 측정용 <p>를 섞어 두어 flat query로는 앵커를 못 잡는다.
+- C7d-1 유지: 위치를 모르는 첨부는 그리지 않는다 (폴백 없음).
+- 검증: D26(xlsx 드래그→디스크 DRAW 변경) + D27(docx 드래그→w:object 이동)
+  green (양 브라우저). 회귀: D22/D23/D24(칩→img), D18(드래그 시작점),
+  P2(존재 단언), E1-docx(허용오차 5px) 갱신 후 green.
+- 알려진 이슈(범위 밖): lib 프레임이 없는 fresh 삽입은 새로고침 전까지
+  오버레이 img만 보이고 lib 네이티브는 안 보인다 (C7 배경 병합 설계).
+  E1-cover-long/E2류(앵커 없는 직접 zip 삽입)는 C7d-1과 충돌 — 별도 트랙에서
+  다룰 것 (C7n 범위 밖).
