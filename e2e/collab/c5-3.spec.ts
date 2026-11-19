@@ -1,4 +1,4 @@
-﻿import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test'
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import JSZip from 'jszip'
