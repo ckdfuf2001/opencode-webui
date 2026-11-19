@@ -1542,5 +1542,7 @@ E21만의 문제가 아니다. 근거:
 - 범위 밖 (선행 실패, C7n 무관): K-dbl pptx/docx/nosubtle/nested (lib 프레임·
   리셋 레이스, C7 빨간불), c5-3 E1-cover-long/E2류 (앵커 없는 직접 zip 삽입은
   C7d-1과 충돌 — 별도 트랙 필요), c5-4 U-parent, D1/D3 등 베이스 실패군.
-- PC 2대 확인 항목 (C7n exe): xlsx/docx 첨부가 96x48 미리보기로 보이고,
-  드래그로 이동 가능 (이동 후 상대 화면에 바로 반영). pptx는 C7m과 동일.
+- PC 2대 확인 항목 (C7n exe): xlsx/docx 첨부는 96x48 미리보기 이미지 하나만 보이고
+  (lib 중복 도형은 숨김 처리 — 같은 파트로 매칭된 것만), 드래그로 이동 가능.
+  이동 후에도 lib 자리에 잔상이 남으면 알려주세요 (unmatched lib 요소는 건드리지 않음).
+  pptx는 C7m과 동일.
