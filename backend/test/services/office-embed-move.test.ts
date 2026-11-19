@@ -128,6 +128,36 @@ describe('moveXlsxEmbed', () => {
     const moved = await moveXlsxEmbed(zipLoad, once, 'xl/embeddings/none.docx', { sheet: 0, col: 2, row: 3 })
     expect(moved.found).toBe(false)
   })
+
+  it('toCol/toRow만 주면 자리 유지 + 크기 변경 (resize)', async () => {
+    const host = await makeHostXlsx()
+    const attach = await makeAttachDocx('ZZ move xlsx resize')
+    const once = await assembleXlsxEmbed(zipLoad, {
+      hostBytes: host,
+      attachBytes: attach,
+      attachName: 'm.docx',
+      attachKind: 'docx',
+      sheet: 0,
+      cellCol: 1,
+      cellRow: 7,
+    })
+    // from=(1,7) 유지, to=(5,25)로 확장.
+    const moved = await moveXlsxEmbed(zipLoad, once, 'xl/embeddings/m.docx', { sheet: 0, toCol: 5, toRow: 25 })
+    expect(moved.found).toBe(true)
+    expect(moved.pos).toEqual({ sheet: 0, col: 1, row: 7, w: 4, h: 18 })
+    const z = await zipLoad(moved.bytes)
+    const sheet = (await z.files['xl/worksheets/sheet1.xml']!.async('string')) as string
+    expect(oleAnchorOf(sheet)).toEqual([1, 0, 7, 0, 5, 0, 25, 0])
+  })
+
+  it('to가 from보다 작으면 400 bad_pos', async () => {
+    const host = await makeHostXlsx()
+    const attach = await makeAttachDocx('ZZ move xlsx badsize')
+    const once = await assembleXlsxEmbed(zipLoad, {
+      hostBytes: host, attachBytes: attach, attachName: 'm.docx', attachKind: 'docx',
+    })
+    await expect(moveXlsxEmbed(zipLoad, once, 'xl/embeddings/m.docx', { sheet: 0, toCol: 0, toRow: 0 })).rejects.toThrowError(/bad_pos|Bad cell/i)
+  })
 })
 
 describe('moveDocxEmbed', () => {
