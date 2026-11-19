@@ -1256,8 +1256,8 @@ export async function moveXlsxEmbed(
   zipLoad: (b: Uint8Array) => Promise<ZipLike>,
   hostBytes: Uint8Array,
   embPart: string,
-  pos: { sheet?: number; col?: number; row?: number },
-): Promise<{ bytes: Uint8Array; found: boolean }> {
+  pos: { sheet?: number; col?: number; row?: number; toCol?: number; toRow?: number },
+): Promise<{ bytes: Uint8Array; found: boolean; pos?: { sheet: number; col: number; row: number; w: number; h: number } }> {
   const zip = await zipLoad(hostBytes)
   const readText = async (name: string): Promise<string | null> => {
     try {
@@ -1291,6 +1291,7 @@ export async function moveXlsxEmbed(
     return m?.[1] ? resolveZipTarget(sheetFile, m[1]) : null
   }
   let done = false
+  let resultPos: { sheet: number; col: number; row: number; w: number; h: number } | undefined
   for (const si of indices) {
     const relId = /r:id="([^"]+)"/.exec(sheetTags[si]!)?.[1] ?? /id="([^"]+)"/.exec(sheetTags[si]!)?.[1]
     const tgt = relId ? wbTarget.get(relId) : undefined
@@ -1381,14 +1382,36 @@ export async function moveXlsxEmbed(
         continue
       }
       const cur = [...am[1]!.matchAll(/<(?:\w+:)?(?:col|row|colOff|rowOff)[^>]*>(\d+)</g)].map((n) => Number(n[1]))
-      if (cur.length < 8 || pos.col === undefined || pos.row === undefined) {
+      // 이동+리사이즈: from 미지정이면 현재 유지, to 미지정이면 크기 유지.
+      const hasMove = pos.col !== undefined && pos.row !== undefined
+      const hasSize = pos.toCol !== undefined && pos.toRow !== undefined
+      if (cur.length < 8 || (!hasMove && !hasSize)) {
         out.push(sheet.slice(p, cPos + '</oleObject>'.length))
         p = cPos + '</oleObject>'.length
         continue
       }
-      const dCol = cur[4]! - cur[0]!
-      const dRow = cur[6]! - cur[2]!
-      const want = [pos.col, cur[1], pos.row, cur[3], pos.col + dCol, cur[5], pos.row + dRow, cur[7]]
+      const curFromC = cur[0]!
+      const curFromR = cur[2]!
+      const newFromC = hasMove ? pos.col! : curFromC
+      const newFromR = hasMove ? pos.row! : curFromR
+      if (!Number.isInteger(newFromC) || !Number.isInteger(newFromR) || newFromC < 0 || newFromR < 0 || newFromC > 16383 || newFromR > 1048575) {
+        embedError('Bad cell', 400, 'bad_pos')
+      }
+      let newToC: number
+      let newToR: number
+      if (hasSize) {
+        newToC = pos.toCol!
+        newToR = pos.toRow!
+      } else {
+        newToC = newFromC + (cur[4]! - cur[0]!)
+        newToR = newFromR + (cur[6]! - cur[2]!)
+      }
+      if (!Number.isInteger(newToC) || !Number.isInteger(newToR) || newToC <= newFromC || newToR <= newFromR || newToC > 16384 || newToR > 1048576) {
+        embedError('Bad cell', 400, 'bad_pos')
+      }
+      const want = [newFromC, cur[1], newFromR, cur[3], newToC, cur[5], newToR, cur[7]]
+      // 106/응답용 최종 위치 (표시 크기도 함께).
+      resultPos = { sheet: si, col: newFromC, row: newFromR, w: newToC - newFromC, h: newToR - newFromR }
       let ki = 0
       const fixed = am[1]!.replace(numRe, (_s: string, open: string, _v: string, close: string) => `${open}${want[ki++ % 8]}${close}`)
       out.push(sheet.slice(p, oEnd + 1))
@@ -1400,7 +1423,7 @@ export async function moveXlsxEmbed(
       if (drawXml && drawFile) {
         const draw = drawAnchors.get(String(sid))
         if (draw) {
-          const dNew = [pos.col, draw[1], pos.row, draw[3], pos.col + (draw[4]! - draw[0]!), draw[5], pos.row + (draw[6]! - draw[2]!), draw[7]]
+          const dNew = [newFromC, draw[1], newFromR, draw[3], newToC, draw[5], newToR, draw[7]]
           const hitPos = drawXml.indexOf(`<xdr:cNvPr id="${sid}"`) >= 0
             ? drawXml.indexOf(`<xdr:cNvPr id="${sid}"`)
             : drawXml.indexOf(`bid="${sid}"`)
@@ -1428,7 +1451,7 @@ export async function moveXlsxEmbed(
         const nv = vmlXml.replace(re, (_s: string, open: string, nums: string, close: string) => {
           const parts = nums.split(',').map((x) => x.trim())
           if (parts.length < 8) return _s
-          const wantV = [pos.col, parts[1], pos.row, parts[3], pos.col! + (Number(parts[4]) - Number(parts[0])), parts[5], pos.row! + (Number(parts[6]) - Number(parts[2])), parts[7]]
+          const wantV = [newFromC, parts[1], newFromR, parts[3], newToC, parts[5], newToR, parts[7]]
           return `${open} ${wantV.join(', ')} ${close}`
         })
         if (nv !== vmlXml) {
@@ -1444,7 +1467,7 @@ export async function moveXlsxEmbed(
   }
   if (!done) return { bytes: hostBytes, found: false }
   const out = await zip.generateAsync({ type: 'uint8array' })
-  return { bytes: out, found: true }
+  return { bytes: out, found: true, pos: resultPos }
 }
 
 /**
