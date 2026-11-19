@@ -494,7 +494,7 @@ function resolveExtraPos(
  * C7n: 드롭 지점의 xlsx 셀 계산 (resolveExtraPos xlsx 분기와 같은 메트릭 역산).
  * 컨테이너 기준 px → {col,row} (0-based). 셀을 못 찾으면 null.
  */
-export function xlsxCellAt(container: HTMLElement, clientX: number, clientY: number): { col: number; row: number } | null {
+function xlsxCellAt(container: HTMLElement, clientX: number, clientY: number): { col: number; row: number } | null {
   try {
     const ed = container.querySelector('xlsx-editor') as unknown as { shadowRoot?: ShadowRoot | null } | null
     const sr = ed?.shadowRoot
@@ -538,7 +538,7 @@ export function xlsxCellAt(container: HTMLElement, clientX: number, clientY: num
  * C7n: 드롭 지점의 docx 블록 인덱스 (resolveExtraPos docx 분기와 같은 문단 목록).
  * 아래쪽에 떨어지면 마지막 블록을 반환한다. 못 찾으면 null.
  */
-export function docxBlockAt(container: HTMLElement, clientY: number): { index: number; text: string } | null {
+function docxBlockAt(container: HTMLElement, clientY: number): { index: number; text: string } | null {
   try {
     const paras = visibleDocxParas(container)
     if (paras.length === 0) return null
