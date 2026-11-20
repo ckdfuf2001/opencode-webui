@@ -25,6 +25,20 @@ import { downloadSingleFile, downloadFolderAsZip } from '@/lib/fileDownload'
 import { showToast } from '@/lib/toast'
 import { useChatAttached } from '@/stores/chatAttachedStore'
 import type { OpenFileSurface } from './openFileRegistry'
+import { detectDocKind } from './docKind'
+
+/** office 문서 mime (목록 행에는 없어서 즉시 선택 시 헤더 표시용). */
+const OFFICE_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword',
+  xls: 'application/vnd.ms-excel',
+  ppt: 'application/vnd.ms-powerpoint',
+  msg: 'application/vnd.ms-outlook',
+  visio: 'application/vnd.visio',
+}
 
 const normalizePath = (p: string): string => p.replace(/\\/g, '/').split('/').filter(Boolean).join('/')
 
@@ -243,6 +257,8 @@ export function FileBrowser({ basePath = '', onFileSelect, embedded = false, ini
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false)
   
   const dropZoneRef = useRef<HTMLDivElement>(null)
+  // D76: 연속 클릭 레이스 가드 (늦은 본문 응답이 최신 선택을 덮지 않게).
+  const fetchSeqRef = useRef(0)
   const isMobile = useMobile()
 
   const { data: managedPages = [] } = useQuery({
@@ -342,6 +358,28 @@ useEffect(() => {
       return
     }
 
+    // D76: 클릭 즉시 선택을 반영한다 (서버 응답 전 피드백 — 행 하이라이트+
+    // 미리보기 셸이 바로 바뀐다). office 문서는 미리보기가 path로 직접
+    // 받으므로(본문 fetch 불필요) 여기서 끝나고, 텍스트 등은 아래서 합친다.
+    const kind = detectDocKind(file.name)
+    const seq = ++fetchSeqRef.current
+    const quick: FileInfo = { ...file }
+    if (kind && !quick.mimeType) {
+      const mapped = OFFICE_MIME[kind]
+      if (mapped) quick.mimeType = mapped
+    }
+    setSelectedFile(quick)
+    // On mobile, open preview in modal
+    if (isMobile) {
+      setIsPreviewModalOpen(true)
+    }
+    if (kind) {
+      onFileSelect?.(quick)
+      setFileLoading(false)
+      return
+    }
+    // 텍스트 등은 본문이 필요하므로 기존처럼 가져온다. 늦게 도착한 응답이
+    // 최신 선택을 덮지 않게 시퀀스로 버린다.
     // Fetch the full file content when selecting a file (tree stays as-is).
     setFileLoading(true)
     try {
@@ -351,6 +389,7 @@ useEffect(() => {
       }
 
       const fullFileData = await response.json()
+      if (fetchSeqRef.current !== seq) return
       setSelectedFile(fullFileData)
       onFileSelect?.(fullFileData)
 
@@ -359,10 +398,11 @@ useEffect(() => {
         setIsPreviewModalOpen(true)
       }
     } catch (err) {
+      if (fetchSeqRef.current !== seq) return
       showToast.error(err instanceof Error ? err.message : 'Failed to load file', { duration: 5000 })
       setSelectedFile(null)
     } finally {
-      setFileLoading(false)
+      if (fetchSeqRef.current === seq) setFileLoading(false)
     }
   }, [onFileSelect, isMobile])
 
