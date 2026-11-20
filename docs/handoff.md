@@ -1523,6 +1523,7 @@ E21만의 문제가 아니다. 근거:
 - PC 2대 확인 항목 (C7m exe): pptx 기존 첨부는 lib 도형 하나만 보이고, hover 파일명·
   lib Download 정상, 도형 dblclick으로 열림. 새로 삽입한 첨부는 상대 화면에 바로 보임.
   (우리 캡션·버튼은 없음이 정상.)
+  xlsx/docx 미리보기 버튼은 dblclick해도 열리지 않아야 한다 (선택만, 열기는 lib 도형 dblclick).
 - Retry 버튼 1클릭 → 최대 3회 자동 재시도 (예산, boundary seq 키로 자식 리마운트).
   xlsx 크래시 진단용 component stack 표시 추가 (에러 화면 펼침 + 콘솔 미러).
 
