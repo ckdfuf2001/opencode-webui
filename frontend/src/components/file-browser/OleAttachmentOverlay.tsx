@@ -838,9 +838,12 @@ function XlsxDocxImgEntry({
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
-  // pos 크기를 그대로 쓴다 (리사이즈 중에는 드래그 크기로 미리보기).
-  const W = Math.max(24, Math.round(size?.w ?? pos.w))
-  const H = Math.max(24, Math.round(size?.h ?? pos.h))
+  // 앵커 크기 기반 표시 (최소 96x48) — 앵커 중앙에 둔다 (E1 라벨 중앙 계약).
+  // 리사이즈 중에는 드래그 크기로 미리보기 (최소 24).
+  const baseW = Math.max(96, pos.w)
+  const baseH = Math.max(48, pos.h)
+  const W = Math.max(24, Math.round(size?.w ?? baseW))
+  const H = Math.max(24, Math.round(size?.h ?? baseH))
   useEffect(() => {
     const onUp = (e: PointerEvent): void => {
       const d = dragRef.current
@@ -881,7 +884,8 @@ function XlsxDocxImgEntry({
         const dx = e.clientX - resizeRef.current.sx
         const dy = e.clientY - resizeRef.current.sy
         if (Math.hypot(dx, dy) >= 5) resizeRef.current.moved = true
-        setSize({ w: Math.max(24, pos.w + dx), h: Math.max(24, pos.h + dy) })
+        // 표시 기준(최소 96x48)에서의 델타 — 드래그 시작점 점프 방지.
+        setSize({ w: Math.max(24, Math.max(96, pos.w) + dx), h: Math.max(24, Math.max(48, pos.h) + dy) })
       }
     }
     window.addEventListener('pointerup', onUp)
@@ -891,10 +895,12 @@ function XlsxDocxImgEntry({
       window.removeEventListener('pointermove', onMoveWin)
     }
   }, [entry, onMove, onResize, onSelect, pos.w, pos.h])
-  // 앵커 좌상단 기준 배치 (리사이즈해도 좌상이 고정 — 셀 앵커 의미 유지).
-  // W==pos.w이면 기존 중앙 배치와 동일 위치이다.
-  const lx = Math.max(0, pos.x + (drag?.dx ?? 0))
-  const ly = Math.max(0, pos.y + (drag?.dy ?? 0))
+  // 앵커 중앙 기준 배치 (라벨·E1 중앙 계약 유지 — 박스만 앵커 크기로 커진다).
+  // 드래그 중에는 같은 중심에서 평행이동한다.
+  const cx = pos.x + pos.w / 2 + (drag?.dx ?? 0)
+  const cy = pos.y + pos.h / 2 + (drag?.dy ?? 0)
+  const lx = Math.max(0, cx - W / 2)
+  const ly = Math.max(0, cy - H / 2)
   return (
     // C7n: 구 칩과 같은 <button> (getByRole 접근성 계약 유지 — divだと AX에서 안 보임).
     <button
@@ -1114,19 +1120,18 @@ export default function OleAttachmentOverlay({
           }
           const r = hit.el.getBoundingClientRect()
           const y = Math.max(0, Math.round(r.top - c.top))
-          // C7n-icon: lib 도형이 작아도 미리보기는 96x48 이상으로 (xlsx/docx 한정).
+          // C7n-resize: posMap은 lib 실측 그대로 둔다 (라벨 중앙·커버 폭 계약).
+          // 96x48 최소 렌더는 XlsxDocxImgEntry가 표시 시점에 적용한다.
           const rw = Math.max(0, Math.round(r.width))
           const rh = Math.max(0, Math.round(r.height))
-          const dw = anchor === 'pptx' ? rw : Math.max(96, rw)
-          const dh = anchor === 'pptx' ? rh : Math.max(48, rh)
           next[entry.partName] = {
             x: Math.max(0, Math.round(r.left - c.left)),
             y,
-            w: dw,
-            h: dh,
+            w: rw,
+            h: rh,
             // lib가 렌더를 포기한 자리(xg-obj-unsupported)는 카드로 덮는다.
             cover: hit.unsupported,
-            captionAbove: y + dh + CAPTION_H > c.height && y - CAPTION_H >= 0,
+            captionAbove: y + rh + CAPTION_H > c.height && y - CAPTION_H >= 0,
             // C7m: lib 도형에서 위치를 잡았으면 lib-only 표시 대상이다.
             libClaimed: true,
           }
