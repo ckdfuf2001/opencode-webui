@@ -1555,3 +1555,8 @@ E21만의 문제가 아니다. 근거:
   단위 7건 green, 회귀 D26/D27 green (chromium).
 - PC 2대 확인 항목: xlsx 첨부 모서리 드래그로 크기 조절 → 상대 화면에 같은
   크기로 반영, 저장 후 데스크톱 Excel에서 DRAW to 위치 확인.
+
+## E1 복구 (2026-11-20, D75)
+- C7n-resize가 깨뜨린 E1-xlsx-pic·E1-cover-short 복구 (posMap은 lib 실측,
+  96x48 최소·중앙 배치는 렌더 시점). 양 브라우저 green, D24·D28 유지.
+- E1-cover-long·E2류는 C7d-1 문서화 베이스 실패라 손대지 않음.

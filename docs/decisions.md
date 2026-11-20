@@ -1057,3 +1057,14 @@
   toCol/toRow 증가 폴링으로 바꿨다 (고정 96*48·형태만 단언은 앵커 크기 렌더에서
   vacuous — 초기 96x60이 바로 통과하고 디스크 반영을 안 기다린다).
 - 남음: D22/D23/D24·D18·P2·E1-docx·K-dbl-xlsx 회귀.
+
+## D75 C7n-resize E1 회귀 복구 (2026-11-20)
+- 배경: C7n-resize가 오버레이를 앵커 좌상단 배치 + posMap 96x48 floor로 바꿔
+  E1-xlsx-pic(라벨 중앙 16px 어긋) · E1-xlsx-cover-short(카드 96 > 박스 74.875) red.
+  red 원문: c5-3 양 브라우저 20 failed 중 해당 4건 (나머지는 C7d-1 문서화 베이스 실패).
+- 결정: posMap은 lib 실측 그대로 둔다 (라벨 중앙·커버 폭 계약).
+  96x48 최소 렌더와 중앙 배치는 XlsxDocxImgEntry 표시 시점에 적용한다.
+  리사이즈 프리뷰 델타도 표시 기준에서 계산 (드래그 시작 점프 방지).
+- 검증: E1-pic·E1-cover-short green (양 브라우저), D24·D28 green 유지 (chromium).
+- 범위 밖 (손대지 않음): E1-xlsx-cover-long·E2류 8건 — 앵커 없는 직접 zip 삽입이
+  C7d-1과 충돌하는 문서화 베이스 실패 (D73과 동일).
