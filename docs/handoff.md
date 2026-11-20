@@ -1546,3 +1546,12 @@ E21만의 문제가 아니다. 근거:
   (lib 중복 도형은 숨김 처리 — 같은 파트로 매칭된 것만), 드래그로 이동 가능.
   이동 후에도 lib 자리에 잔상이 남으면 알려주세요 (unmatched lib 요소는 건드리지 않음).
   pptx는 C7m과 동일.
+
+## C7n-resize xlsx 크기 조절 (2026-11-20, D74/D28)
+- 구현: 선택 시 모서리 핸들 (xlsx만) + PUT /embed/pos {toCol,toRow} (from 유지).
+  미리보기는 앵커 크기대로 (pos.w/h × 실측 셀, 최소 96x48), 좌상단 앵커 배치.
+  서버 moveXlsxEmbed to전용 리사이즈 + w/h pos 반환 (to<=from은 400).
+- 검증: D28 green (양 브라우저, [2,12,3,15]→[2,12,6,18], 96x60→256x120),
+  단위 7건 green, 회귀 D26/D27 green (chromium).
+- PC 2대 확인 항목: xlsx 첨부 모서리 드래그로 크기 조절 → 상대 화면에 같은
+  크기로 반영, 저장 후 데스크톱 Excel에서 DRAW to 위치 확인.
