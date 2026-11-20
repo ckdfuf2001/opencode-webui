@@ -146,4 +146,29 @@ test.describe('UI 개편 (U1~U3)', () => {
       await ctx.close().catch(() => {})
     }
   })
+
+  test('U4: 다른 파일 클릭 시 응답 전에도 선택 표시 + 미리보기가 바뀐다', async ({ browser }: { browser: Browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    try {
+      await gotoApp(page)
+      // A(pptx)를 먼저 정상 오픈한다 (지연 걸기 전).
+      await openFile(page, PPTX, 'view')
+      await page.waitForSelector('[data-testid="pptx-viewer-root"]', { timeout: 60000 })
+      // 이후 모든 파일 API를 5초 지연시킨다 (느린 base64 전체 로드 재현).
+      await page.route('**/api/files/**', async (route) => {
+        await new Promise((r) => setTimeout(r, 5000))
+        await route.continue()
+      })
+      // B(xlsx) 행을 클릭한다.
+      const rowB = page.locator('[data-testid="file-row"][data-path$="probe-seeded-before-server.xlsx"]')
+      await rowB.locator('span', { hasText: 'probe-seeded-before-server.xlsx' }).first().click({ timeout: 20000 })
+      // 응답이 오기 전(2초 안)에 선택 표시 + 미리보기 헤더가 B로 바뀌어야 한다.
+      await expect.poll(async () => rowB.evaluate((el) => el.className.includes('bg-blue-500')), { timeout: 2000, intervals: [100] }).toBe(true)
+      await expect(page.getByTestId('preview-file-header')).toContainText('probe-seeded-before-server.xlsx', { timeout: 2000 })
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
 })
