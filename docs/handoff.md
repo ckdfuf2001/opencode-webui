@@ -1561,3 +1561,8 @@ E21만의 문제가 아니다. 근거:
 - C7n-resize가 깨뜨린 E1-xlsx-pic·E1-cover-short 복구 (posMap은 lib 실측,
   96x48 최소·중앙 배치는 렌더 시점). 양 브라우저 green, D24·D28 유지.
 - E1-cover-long·E2류는 C7d-1 문서화 베이스 실패라 손대지 않음.
+
+## 파일 전환 즉시 선택 (2026-11-21, D76)
+- 클릭 즉시 행 하이라이트 + 미리보기 전환. office는 본문 fetch 생략
+  (DocumentPreview가 raw로 직접 받음 — 2중 다운로드 제거).
+- 텍스트 등은 기존 fetch 유지 + 늦은 응답 레이스 가드.

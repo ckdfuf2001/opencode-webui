@@ -1068,3 +1068,18 @@
 - 검증: E1-pic·E1-cover-short green (양 브라우저), D24·D28 green 유지 (chromium).
 - 범위 밖 (손대지 않음): E1-xlsx-cover-long·E2류 8건 — 앵커 없는 직접 zip 삽입이
   C7d-1과 충돌하는 문서화 베이스 실패 (D73과 동일).
+
+## D76 탐색기 파일 전환 즉시 선택 + office 본문 fetch 생략 (2026-11-21)
+- 배경: 파일 A를 연 뒤 B를 누르면 한참 뒤에 열리고, 그동안 반응이 없어 보였다.
+- 원인 3건: (1) `GET /api/files/경로` 전체 base64 응답이 올 때까지
+  `setSelectedFile`을 안 해서 행 하이라이트·미리보기가 그대로였다 (U4 red로 확정).
+  (2) office는 `file.content`를 안 쓰는데(`FilePreview`→`DocumentPreview`가
+  `?raw=true`로 다시 받음) 매 클릭마다 전체를 base64로 내려받았다 — 2중 다운로드.
+  (3) 마운트 후 lib 파싱 + collab 참가까지 추가 대기.
+- 결정: 클릭 즉시 행 info로 `setSelectedFile` (피드백) + office는 content fetch
+  생략 (path 기반 렌더). 텍스트 등은 기존 fetch 유지하되 시퀀스 가드로
+  늦은 응답이 최신 선택을 덮지 않게 한다. `onFileSelect` 호출 시점은 유지
+  (office 즉시 1회 / 텍스트 fetch 후 1회).
+- 검증: U4 red→green (chromium, 5초 지연 하에서도 2초 내 행+헤더 전환).
+  회귀 U1~U3 green. tsc clean.
+- red 원문: U4 `bg-blue-500` 2초 poll 실패 (`run-u4red.txt`).
