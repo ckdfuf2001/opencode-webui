@@ -2909,7 +2909,14 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
       expect(drop, 'drop target').not.toBeNull()
       await t.pageA.mouse.move(drop![0], drop![1], { steps: 20 })
       await t.pageA.mouse.up()
-      // 먼저 화면 칩이 커졌는지 확인 (106 수신 + 오버레이 반영 증명).
+      // 리사이즈 전 화면 박스 (앵커 크기 렌더라 초기값이 96x48보다 클 수 있다).
+      const boxBefore = (await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
+        const hit = els.find((e) => e.getAttribute('aria-label') === `첨부 ${want}`) as HTMLElement | null
+        if (!hit) return null
+        const r = hit.getBoundingClientRect()
+        return [Math.round(r.width), Math.round(r.height)]
+      }, 'sizemove.xlsx'))!
+      // 먼저 화면 칩이 커졌는지 확인 (PUT 응답 + 오버레이 반영 증명).
       await expect
         .poll(async () => {
           const b = await t.pageA.getByTestId('ole-icon').evaluateAll((els, want) => {
@@ -2920,14 +2927,20 @@ test('D14-pptx: 사용자 파일(고아 파트) 새로고침 후 좌상단 120x1
           }, 'sizemove.xlsx')
           return b === null ? 0 : b[0] * b[1]
         }, { timeout: 30000, intervals: [1000] })
-        .toBeGreaterThan(96 * 48)
-      // to 셀이 오른쪽·아래로 늘어난다.
+        .toBeGreaterThan(boxBefore[0]! * boxBefore[1]!)
+      // to 셀이 오른쪽·아래로 늘어난다 (디스크에 반영될 때까지 폴링).
       await expect
         .poll(async () => {
           const c = await anchorBox()
-          return c === null ? [-1, -1, -1, -1] : c
+          return c === null ? -1 : c[2]!
         }, { timeout: 30000, intervals: [1000] })
-        .toEqual(expect.arrayContaining([expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number)]))
+        .toBeGreaterThan(before[2])
+      await expect
+        .poll(async () => {
+          const c = await anchorBox()
+          return c === null ? -1 : c[3]!
+        }, { timeout: 30000, intervals: [1000] })
+        .toBeGreaterThan(before[3])
       const after = (await anchorBox())!
       expect(after[2]).toBeGreaterThan(before[2])
       expect(after[3]).toBeGreaterThan(before[3])
