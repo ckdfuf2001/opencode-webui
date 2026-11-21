@@ -1093,3 +1093,15 @@
 - 검증: U5 red→green (chromium, 조회 숨김 + 편집탭 표시).
   회귀 U1~U4 green. tsc clean.
 - red 원문: U5 `office-ui-ribbon` visible 2초 poll 실패.
+
+## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
+- 배경: html은 텍스트로만 보여서 렌더 결과를 볼 수 없었다.
+- 결정: `[화면]/[소스]` 탭 (기본 화면). 화면은 `/api/html-view` iframe,
+  `sandbox="allow-scripts allow-forms allow-popups"`에서
+  `allow-same-origin` 제외 (앱 API 같은 출처 호출 차단).
+  소스는 기존 텍스트 뷰어. 탭 기억은 `localStorage html-preview-tab`.
+  상대 리소스는 `<base href="/api/html-view/asset/...">`로 해결됨을 확인
+  (서버 수정 없음 — 0단계에서 base 주입 + 에셋 라우트 동작 확인).
+- 검증: H5 red→green. red 초반은 테스트 하네스 문제였고(행 탐색·에셋 경로),
+  진짜 red는 iframe 부재였다. 회귀: xlsx 미리보기에 탭 없음.
+  tsc clean.
