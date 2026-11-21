@@ -3,8 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { API_BASE_URL } from '@/config'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import type { MessageListItem } from '@/hooks/useOpenCode'
-import { searchMessages, reindexMessages, type MessageSearchHit } from '@/api/search'
+import { searchMessages, reindexMessages, expandMessage, type MessageSearchHit, type MessageExpandRow } from '@/api/search'
 import { toggleTurn } from '@/lib/turnSelection'
+import { groupSearchHits } from '@opencode-webui/shared/lib/searchTurns'
 import { SelectedExportButtons } from '@/components/session/SelectedExportButtons'
 import { formatChatTime } from '@/lib/chatTime'
 
@@ -128,10 +129,17 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [rangeMode, setRangeMode] = useState(false)
   const [rangeStart, setRangeStart] = useState<string | null>(null)
+  // F1-2: 3단계 펼침 상태 (턴 키 기준). 상세 내용은 턴 단위로 불러와 캐시한다.
+  const [expandedTurnKey, setExpandedTurnKey] = useState<string | null>(null)
+  const [detailTurnKey, setDetailTurnKey] = useState<string | null>(null)
+  const [detailLoadingKey, setDetailLoadingKey] = useState<string | null>(null)
+  const detailCache = useRef(new Map<string, MessageExpandRow[]>())
   useEffect(() => {
     setSelectedIds(new Set())
     setRangeMode(false)
     setRangeStart(null)
+    setExpandedTurnKey(null)
+    setDetailTurnKey(null)
   }, [sessionId])
 
   const visibleIds = useMemo(() => {
@@ -139,6 +147,26 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
       ? entryItems.map((m) => m.id)
       : searchItems.map((h) => h.messageId)
   }, [needle, entryItems, searchItems])
+
+  // F1-2: 검색 결과는 턴 단위로 묶어 보여준다 (user → 다음 user).
+  const turnGroups = useMemo(
+    () => (needle.length === 0 ? [] : groupSearchHits(searchItems)),
+    [needle, searchItems],
+  )
+  const turnKeys = useMemo(() => turnGroups.map((g) => g.key), [turnGroups])
+  const turnOf = (key: string): MessageSearchHit[] => {
+    const g = turnGroups.find((x) => x.key === key)
+    if (!g) return []
+    return g.hitIndexes.map((i) => searchItems[i]).filter((h): h is MessageSearchHit => !!h)
+  }
+  const turnUserOf = (key: string): { messageId: string; text: string } | null => {
+    for (const h of turnOf(key)) {
+      if (h.turnUser) return { messageId: h.turnUser.messageId, text: h.turnUser.text }
+    }
+    const firstUser = turnOf(key).find((h) => h.role === 'user')
+    if (firstUser) return { messageId: firstUser.messageId, text: firstUser.snippet }
+    return null
+  }
 
   // 체크 토글: user면 다음 user 전까지 턴 단위, assistant는 낱개 (해제도 낱개 가능)
   const toggleSelect = (id: string) => {
@@ -185,6 +213,84 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
     setRangeMode(false)
   }
 
+  // F1-2: 턴 단위 선택 토글 (턴 안 메시지 전체를 한 번에).
+  const toggleSelectTurn = (key: string): void => {
+    const ids = turnOf(key).map((h) => h.messageId).filter(Boolean)
+    if (ids.length === 0) return
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (ids.every((k) => next.has(k))) for (const k of ids) next.delete(k)
+      else for (const k of ids) next.add(k)
+      return next
+    })
+  }
+
+  const handleTurnRowClick = (key: string): void => {
+    if (rangeMode) {
+      if (rangeStart == null) {
+        setRangeStart(key)
+        return
+      }
+      const a = turnKeys.indexOf(rangeStart)
+      const b = turnKeys.indexOf(key)
+      if (a === -1 || b === -1) {
+        setRangeStart(key)
+        return
+      }
+      const [from, to] = a <= b ? [a, b] : [b, a]
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        for (let i = from; i <= to; i++) for (const h of turnOf(turnKeys[i]!)) next.add(h.messageId)
+        return next
+      })
+      setRangeStart(null)
+      setRangeMode(false)
+      return
+    }
+    // 1단계: 그 턴의 마지막 assistant 응답을 펼친다.
+    setDetailTurnKey(null)
+    setExpandedTurnKey((prev) => (prev === key ? null : key))
+  }
+
+  // F1-2: 2단계 상세 — 턴 전체(도구 호출·중간 응답 포함)를 그때 불러와 캐시한다.
+  const loadTurnDetail = async (key: string): Promise<void> => {
+    if (detailTurnKey === key) {
+      setDetailTurnKey(null)
+      return
+    }
+    const cached = detailCache.current.get(key)
+    if (cached) {
+      setDetailTurnKey(key)
+      return
+    }
+    const tu = turnUserOf(key)
+    if (!tu) return
+    const groupHits = turnOf(key)
+    const userTi = Math.min(...groupHits.map((h) => h.turnIndex ?? 0))
+    setDetailLoadingKey(key)
+    try {
+      const d = await expandMessage(tu.messageId, 20)
+      const sorted = [...d.rows].sort((a, b) => a.turnIndex - b.turnIndex)
+      const out: MessageExpandRow[] = []
+      let started = false
+      for (const r of sorted) {
+        if (!started) {
+          if (r.turnIndex < userTi) continue
+          started = true
+        } else if (r.turnIndex > userTi && r.role === 'user') {
+          break
+        }
+        out.push(r)
+      }
+      detailCache.current.set(key, out.length > 0 ? out : sorted)
+      setDetailTurnKey(key)
+    } catch {
+      /* 무시 — 다음 클릭에 재시도 */
+    } finally {
+      setDetailLoadingKey(null)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent
@@ -194,9 +300,9 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
         <DialogTitle>Search / Go to message{total != null && total > 0 ? ` (${total})` : ''}</DialogTitle>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-muted-foreground">
-            {rangeMode
-              ? (rangeStart ? '종료점을 누르세요' : '시작점을 누르세요')
-              : selectedIds.size > 0 ? `${selectedIds.size}개 선택됨` : '행 클릭: 이동 · 체크: 선택'}
+        {rangeMode
+          ? (rangeStart ? '종료점을 누르세요' : '시작점을 누르세요')
+          : selectedIds.size > 0 ? `${selectedIds.size}개 선택됨` : '행 클릭: 펼치기 · 체크: 선택'}
           </span>
           <span className="flex-1" />
           <button
@@ -253,19 +359,36 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
                   onJump={() => handleRowClick(m.id)}
                 />
               ))
-            : searchItems.map((h: MessageSearchHit) => (
-                <JumpRow
-                  key={h.messageId}
-                  no={h.turnIndex + 1}
-                  role={h.role}
-                  preview={h.snippet}
-                  created={h.ts}
-                  checked={selectedIds.has(h.messageId)}
-                  rangeStart={rangeMode && rangeStart === h.messageId}
-                  onCheck={() => toggleSelect(h.messageId)}
-                  onJump={() => handleRowClick(h.messageId)}
-                />
-              ))}
+            : searchItems.length === 0 ? null : turnGroups.map((g) => {
+                const hits = turnOf(g.key)
+                if (hits.length === 0) return null
+                const first = hits[0]!
+                const tu = turnUserOf(g.key)
+                const respOnly = hits.length > 0 && hits.every((h) => h.role !== 'user')
+                const last = hits.map((h) => h.turnLast).find((x) => !!x) ?? null
+                const allIds = hits.map((h) => h.messageId)
+                const allChecked = allIds.length > 0 && allIds.every((k) => selectedIds.has(k))
+                return (
+                  <TurnRow
+                    key={g.key}
+                    turnKey={g.key}
+                    userText={tu?.text ?? first.snippet}
+                    created={first.ts}
+                    respOnly={respOnly}
+                    expanded={expandedTurnKey === g.key}
+                    lastText={last?.text ?? null}
+                    detailOpen={detailTurnKey === g.key}
+                    detailLoading={detailLoadingKey === g.key}
+                    detailRows={detailCache.current.get(g.key) ?? null}
+                    checked={allChecked}
+                    rangeStart={rangeMode && rangeStart === g.key}
+                    onCheck={() => toggleSelectTurn(g.key)}
+                    onToggleExpand={() => handleTurnRowClick(g.key)}
+                    onToggleDetail={() => void loadTurnDetail(g.key)}
+                    onJump={() => onJump(tu?.messageId ?? first.messageId)}
+                  />
+                )
+              })}
           {(entryFetching || searchFetching) && (searchItems.length > 0 || entryItems.length > 0) && (
             <div className="w-full text-center px-2 py-2 text-xs text-muted-foreground">
               Loading… ({Math.max(searchItems.length, entryItems.length)}{total > 0 ? ` / ${total}` : ''})
@@ -274,6 +397,94 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function TurnRow({ turnKey, userText, created, respOnly, expanded, lastText, detailOpen, detailLoading, detailRows, checked, rangeStart, onCheck, onToggleExpand, onToggleDetail, onJump }: {
+  turnKey: string
+  userText: string
+  created: number
+  respOnly: boolean
+  expanded: boolean
+  lastText: string | null
+  detailOpen: boolean
+  detailLoading: boolean
+  detailRows: MessageExpandRow[] | null
+  checked: boolean
+  rangeStart: boolean
+  onCheck: () => void
+  onToggleExpand: () => void
+  onToggleDetail: () => void
+  onJump: () => void
+}) {
+  return (
+    <div
+      data-testid="jump-turn-row"
+      data-turn-key={turnKey}
+      onClick={onToggleExpand}
+      className={`w-full text-left px-2 py-1.5 rounded-md hover:bg-accent cursor-pointer ${checked ? 'bg-primary/5 ring-1 ring-primary/30' : ''} ${rangeStart ? 'ring-1 ring-primary/60 bg-primary/10' : ''}`}
+    >
+      <div className="flex items-baseline gap-2">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={onCheck}
+          onClick={(e) => e.stopPropagation()}
+          className="h-3.5 w-3.5 shrink-0 accent-primary"
+          title="선택"
+        />
+        <span className="text-[10px] font-medium w-14 shrink-0 text-blue-500">You</span>
+        <span className="text-xs truncate flex-1">{userText || '(empty)'}</span>
+        {respOnly && (
+          <span className="text-[10px] rounded bg-amber-500/15 text-amber-500 px-1 shrink-0" title="검색어가 응답에만 있어 속한 턴을 보여줍니다">응답에서 일치</span>
+        )}
+        {created ? (
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            {formatChatTime(created)}
+          </span>
+        ) : null}
+      </div>
+      {expanded && (
+        <div className="mt-1.5 ml-6 rounded bg-muted/30 p-2 text-xs" data-testid="jump-turn-last">
+          {lastText ? (
+            <div className="whitespace-pre-wrap break-words">{lastText}</div>
+          ) : (
+            <div className="text-muted-foreground">아직 응답 없음</div>
+          )}
+          <div className="mt-1.5 flex gap-1">
+            <button
+              type="button"
+              data-testid="jump-turn-detail-btn"
+              onClick={(e) => { e.stopPropagation(); onToggleDetail() }}
+              className="text-[11px] px-2 py-0.5 rounded border border-input hover:bg-accent text-muted-foreground"
+            >
+              {detailOpen ? '상세 닫기' : detailLoading ? '불러오는 중…' : '상세'}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onJump() }}
+              className="text-[11px] px-2 py-0.5 rounded border border-input hover:bg-accent text-muted-foreground"
+              title="해당 메시지로 이동"
+            >
+              이동
+            </button>
+          </div>
+        </div>
+      )}
+      {expanded && detailOpen && (
+        <div className="mt-1.5 ml-6 max-h-64 overflow-y-auto rounded border border-input bg-background/90 p-2 space-y-1.5" data-testid="jump-turn-detail">
+          {(detailRows ?? []).map((row) => (
+            <div key={row.messageId} className="text-xs">
+              <div className="flex gap-2 text-[10px] text-muted-foreground mb-0.5">
+                <span>{row.role}</span>
+                <span>#{row.turnIndex}</span>
+              </div>
+              <div className="whitespace-pre-wrap break-words">{row.text || '(empty)'}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

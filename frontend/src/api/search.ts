@@ -1,5 +1,11 @@
 import { API_BASE_URL } from '@/config'
 
+export interface MessageTurnRef {
+  messageId: string
+  role: string
+  text: string
+}
+
 export interface MessageSearchHit {
   sessionId: string
   messageId: string
@@ -8,6 +14,10 @@ export interface MessageSearchHit {
   turnIndex: number
   ts: number
   snippet: string
+  /** F1-2: 이 턴의 사용자 메시지. */
+  turnUser?: MessageTurnRef | null
+  /** F1-2: 이 턴의 마지막 assistant 응답. */
+  turnLast?: MessageTurnRef | null
 }
 
 export interface MessageExpandRow {
@@ -155,6 +165,10 @@ export interface RecallHit {
   ts?: number
   sha?: string
   role?: string
+  /** F1-2: 이 턴의 사용자 메시지. */
+  turnUser?: MessageTurnRef | null
+  /** F1-2: 이 턴의 마지막 assistant 응답. */
+  turnLast?: MessageTurnRef | null
 }
 
 export interface RecallPage {
