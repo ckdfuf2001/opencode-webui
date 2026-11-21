@@ -36,6 +36,7 @@ import { addXlsxComment, replyXlsxComment, setXlsxCommentDone, editXlsxComment, 
 import { collabApi, collabServerUrl, type CollabRoomSummary } from '@/api/collab'
 import { detectDocKind, type DocKind } from './docKind'
 import { useTheme } from '@/hooks/useTheme'
+import { useMobile } from '@/hooks/useMobile'
 import { readCollabUser, ensureCollabIdentity } from '@/lib/collabUser'
 import { hasEmbObject, isBlockedXlsxEdit, decideObjectOp, NO_OBJECT_GUARD, shouldFlushOnPeerArrive, type ObjectGuardCtx } from '@/lib/xlsxCollabGuard'
 import { anchorKey, assignObjectKeys, createObjectTapProvider, describeDrawingKind, diffObjects, type DrawingLike, type ObjectAnchor, type ObjectsStateMsg, encodeOleSelected } from '@/lib/xlsxObjects'
@@ -1198,6 +1199,8 @@ function ExtractedTextView({ text, fileName, path, msg }: { text: string; fileNa
 
 export function DocxViewer({ data, editing = false, path, fileName, standalone = false, persistOverride, registerSaver, etag: etagProp, part }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void; etag?: string | null; part?: string }) {
   const appTheme = useTheme()
+  // D77: pptx와 동일 — 조회모드 리본 숨김 (모바일은 시트 이동용으로 유지).
+  const narrowViewport = useMobile()
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
   const content = savedBytes ?? baseContent
@@ -2183,7 +2186,7 @@ export function DocxViewer({ data, editing = false, path, fileName, standalone =
               <WordEditor
                 ref={setHandle}
                 readOnly={!editing}
-                showToolbar
+                showToolbar={editing || narrowViewport}
                 theme={appTheme}
                 ribbonAddIns={attachAddIns}
                 hiddenActions={docxHiddenActions}
@@ -2483,6 +2486,8 @@ function XlsxIconBtn({
 export function XlsxViewer({ data, fileName, editing = false, path, etag: etagProp, onRoomHasEditorsChange, onRequestReload, standalone = false, persistOverride, registerSaver, part }: { data: ArrayBuffer; fileName?: string; editing?: boolean; path: string; etag?: string | null; onRoomHasEditorsChange?: (has: boolean) => void; onRequestReload?: () => void; standalone?: boolean; persistOverride?: (bytes: Uint8Array) => Promise<boolean>; registerSaver?: (s: AttachmentSaver | null) => void; part?: string }) {
   const appTheme = useTheme()
   const queryClient = useQueryClient()
+  // D77: pptx와 동일 — 조회모드 리본 숨김 (모바일은 시트 이동용으로 유지).
+  const narrowViewport = useMobile()
   const [error, setError] = useState<string | null>(null)
   const baseContent = useMemo(() => new Uint8Array(data.slice(0)), [data])
   const [savedBytes, setSavedBytes] = useState<Uint8Array | null>(null)
@@ -4961,9 +4966,9 @@ export function XlsxViewer({ data, fileName, editing = false, path, etag: etagPr
             fileName={fileName}
             // X1c(P1): 방 판정이 끝날 때까지 편집을 막는다(먼저 입력한 내용의 유실 방지).
             readOnly={!editing || connecting || forceViewOnly}
-            // 보기 모드에서도 리본을 보여준다 (Insert/첨부 탭 진입점).
+            // D77: 조회모드 리본 숨김 (pptx와 동일). 편집·모바일만 표시.
             // readOnly 라 lib 가 편집 커맨드를 비활성화한다.
-            showToolbar
+            showToolbar={editing || narrowViewport}
             showFormulaBar={editing}
             theme={appTheme}
             collaboration={collabOptions}
