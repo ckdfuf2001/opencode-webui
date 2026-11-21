@@ -14,6 +14,9 @@ const DocumentPreview = lazyWithRetry(() =>
  *  PPT 뷰 모드 collab join을 깨뜨린다 (C5-3 회귀). */
 const AttachmentEditor = lazyWithRetry(() => import('./AttachmentEditor'))
 import { detectDocKind } from './docKind'
+import { htmlViewUrl, openHtmlInNewTab } from '@/lib/html-view'
+
+const HTML_TAB_KEY = 'html-preview-tab'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { GPU_ACCELERATED_STYLE } from '@/lib/utils'
 import { useShadowedFile, type OpenFileSurface } from './openFileRegistry'
@@ -70,6 +73,23 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
   }, [file.path])
 
   const docKind = detectDocKind(file.name)
+  // F1-5: html 미리보기 [화면]/[소스] 탭. 마지막 선택을 기억한다.
+  const isHtml = /\.(html?|xhtml?)$/i.test(file.name)
+  const [htmlTab, setHtmlTab] = useState<'screen' | 'source'>(() => {
+    try {
+      return localStorage.getItem(HTML_TAB_KEY) === 'source' ? 'source' : 'screen'
+    } catch {
+      return 'screen'
+    }
+  })
+  const selectHtmlTab = (tab: 'screen' | 'source'): void => {
+    setHtmlTab(tab)
+    try {
+      localStorage.setItem(HTML_TAB_KEY, tab)
+    } catch {
+      /* 무시 */
+    }
+  }
   
   const shouldVirtualize = docKind === null && file.size > VIRTUALIZATION_THRESHOLD_BYTES && !file.mimeType?.startsWith('image/')
   
@@ -247,6 +267,55 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     ['application/json', 'application/xml', 'text/javascript', 'text/typescript'].includes(file.mimeType || ''))
 
   const renderContent = () => {
+    // F1-5: html은 [화면]/[소스] 탭. 화면은 /api/html-view iframe
+    // (sandbox에서 allow-same-origin 제외 — 미리보는 HTML이 앱 API를
+    // 같은 출처 권한으로 호출할 수 없게 한다). 소스는 기존 텍스트 뷰어.
+    if (isHtml) {
+      return (
+        <div className="flex h-full min-h-[480px] flex-col">
+          <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
+            <button
+              type="button"
+              data-testid="html-preview-tab-screen"
+              onClick={() => selectHtmlTab('screen')}
+              className={`rounded px-2 py-1 text-xs ${htmlTab === 'screen' ? 'bg-background font-medium text-foreground shadow-sm border border-input' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              화면
+            </button>
+            <button
+              type="button"
+              data-testid="html-preview-tab-source"
+              onClick={() => selectHtmlTab('source')}
+              className={`rounded px-2 py-1 text-xs ${htmlTab === 'source' ? 'bg-background font-medium text-foreground shadow-sm border border-input' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              소스
+            </button>
+            <span className="flex-1" />
+            <button
+              type="button"
+              title="새 탭에서 열기"
+              onClick={() => openHtmlInNewTab(file.path, file.name)}
+              className="rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              새 탭에서 열기
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {htmlTab === 'screen' ? (
+              <iframe
+                data-testid="html-preview-frame"
+                title={file.name}
+                src={htmlViewUrl(file.path)}
+                sandbox="allow-scripts allow-forms allow-popups"
+                className="h-full min-h-[480px] w-full border-0 bg-white"
+              />
+            ) : (
+              renderTextContent()
+            )}
+          </div>
+        </div>
+      )
+    }
     if (docKind) {
       return (
         <Suspense fallback={<div className="flex items-center justify-center py-12 text-sm text-muted-foreground">Loading viewer…</div>}>
@@ -258,15 +327,19 @@ export const FilePreview = memo(function FilePreview({ file, hideHeader = false,
     if (file.mimeType?.startsWith('image/')) {
       return (
         <div className="flex justify-center p-4">
-          <img 
-            src={`${API_BASE}/api/files/${file.path}?raw=true`}
-            alt={file.name}
-            className="max-w-full h-auto object-contain rounded"
-          />
+      <img 
+        src={`${API_BASE}/api/files/${file.path}?raw=true`}
+        alt={file.name}
+        className="max-w-full h-auto object-contain rounded"
+      />
         </div>
       )
     }
 
+    return renderTextContent()
+  }
+
+  const renderTextContent = (): ReactNode => {
     if (shouldVirtualize && isTextFile) {
       return (
         <VirtualizedTextView
