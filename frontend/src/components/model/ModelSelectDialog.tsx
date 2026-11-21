@@ -138,7 +138,7 @@ export function ModelSelectDialog({
       // 스냅샷 저장 (성공한 provider만 업스트림 id로 교체).
       const prev = (preferences?.modelSnapshots ?? {}) as Record<string, string[]>;
       const next: Record<string, string[]> = { ...prev };
-      for (const [pid, ids] of upstreamById) next[pid] = ids;
+      for (const [pid, ids] of upstreamById) next[pid] = [...new Set([...(prev[pid] ?? []), ...ids])];
       try {
         await updateSettingsAsync({ modelSnapshots: next } as Parameters<typeof updateSettingsAsync>[0]);
       } catch {
