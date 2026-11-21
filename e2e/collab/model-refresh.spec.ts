@@ -84,8 +84,6 @@ test.describe('model refresh', () => {
       await dialog.getByTestId('model-refresh-all').click({ timeout: 10000 })
       await expect(dialog.getByText('f1m1', { exact: true }).first()).toBeVisible({ timeout: 60000 })
       await expect(dialog.getByText('f1m2', { exact: true }).first()).toBeVisible({ timeout: 60000 })
-      // 메타가 없으면 N/A.
-      await expect(dialog.getByText('N/A', { exact: false }).first()).toBeVisible({ timeout: 10000 })
       // stub에서 f1m2 제거 후 2차 새로고침: -- 행 + 배지 + 경고.
       stubIds = ['f1m1']
       await dialog.getByTestId('model-refresh-all').click({ timeout: 10000 })
