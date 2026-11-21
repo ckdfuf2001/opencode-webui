@@ -18,9 +18,11 @@ const PNG_1PX = Buffer.from(
   'base64',
 )
 
-async function openRow(page: Page, seg: string, name: string): Promise<void> {
-  await page.getByTitle('Workspace').click({ timeout: 20000 })
-  await page.waitForFunction(() => document.querySelectorAll('[data-testid="file-row"]').length > 0, null, { timeout: 30000 })
+async function openRow(page: Page, seg: string, name: string, reopenWorkspace = true): Promise<void> {
+  if (reopenWorkspace) {
+    await page.getByTitle('Workspace').click({ timeout: 20000 })
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="file-row"]').length > 0, null, { timeout: 30000 })
+  }
   // 레포가 루트로 뜬다 (c5-1 mkRepo 패턴). seg 폴더를 펼친 뒤 파일을 누른다.
   for (let i = 0; i < 8; i++) {
     const state = await page.evaluate(([n, s]) => {
@@ -81,10 +83,10 @@ test.describe('HTML preview tabs', () => {
       const tokens = sandbox.split(/\s+/).filter(Boolean)
       expect(tokens).toContain('allow-scripts')
       expect(tokens).not.toContain('allow-same-origin')
-      // 상대 리소스가 에셋 엔드포인트로 서빙된다.
-      const css = await page.request.get(`${backendBase()}/api/html-view/asset/repos/${seg}/h5-style.css`)
+      // 상대 리소스가 에셋 엔드포인트로 서빙된다 (iframe과 같은 base).
+      const css = await page.request.get(`${backendBase()}/api/html-view/asset/${seg}/h5-style.css`)
       expect(css.ok()).toBe(true)
-      const img = await page.request.get(`${backendBase()}/api/html-view/asset/repos/${seg}/h5-dot.png`)
+      const img = await page.request.get(`${backendBase()}/api/html-view/asset/${seg}/h5-dot.png`)
       expect(img.ok()).toBe(true)
       // 소스 탭: 원문 텍스트가 보인다.
       await page.getByTestId('html-preview-tab-source').click({ timeout: 10000 })
@@ -93,8 +95,8 @@ test.describe('HTML preview tabs', () => {
       // 화면 탭으로 복귀.
       await page.getByTestId('html-preview-tab-screen').click({ timeout: 10000 })
       await expect(page.getByTestId('html-preview-frame')).toBeVisible({ timeout: 10000 })
-      // 회귀: xlsx 미리보기에 html 탭이 없다.
-      await openRow(page, 'collab-e2e', 'probe-seeded-before-server.xlsx')
+      // 회귀: xlsx 미리보기에 html 탭이 없다 (시트는 이미 열려 있음).
+      await openRow(page, 'collab-e2e', 'probe-seeded-before-server.xlsx', false)
       await page.waitForTimeout(3000)
       await expect(page.getByTestId('html-preview-frame')).toHaveCount(0)
       await expect(page.getByTestId('html-preview-tab-screen')).toHaveCount(0)

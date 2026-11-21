@@ -41,7 +41,7 @@ test.describe('chat queue preview', () => {
       await gotoApp(page)
       await page.goto(`/repos/${repoId}?collabDebug=1&e2e=1`, { waitUntil: 'domcontentloaded', timeout: 30000 })
       await page.getByRole('button', { name: 'Session', exact: true }).first().click({ timeout: 30000 })
-      await page.waitForURL(/\/sessions\/[^/]+$/, { timeout: 30000 })
+      await page.waitForURL(/\/sessions\/[^/?]+/, { timeout: 30000 })
       const sessionId = page.url().split('/').pop()!.split('?')[0]!
       await page.locator('textarea').first().waitFor({ timeout: 60000 })
       // 자동 발송 방지: 일시정지 후 2건 적재.
@@ -73,12 +73,12 @@ test.describe('chat queue preview', () => {
       await page.mouse.move(10, 10)
       await expect(preview).toBeVisible({ timeout: 5000 })
       await expect(preview).toContainText(LONG_A.slice(0, 60))
+      // 다른 행의 버튼은 미리보기를 바꾸지 않는다 (전파 차단):
+      // B를 위로 올리면 순서만 바뀌고 미리보기는 A 그대로다.
+      await rowB.getByRole('button', { name: 'Move up one' }).click({ timeout: 10000 })
+      await expect(preview).toContainText(LONG_A.slice(0, 60))
       // 다른 항목 클릭: 미리보기가 B로 전환된다.
       await rowB.click({ timeout: 10000 })
-      await expect(preview).toContainText(LONG_B.slice(0, 60))
-      // 행 버튼은 미리보기를 열지 않는다 (전파 차단): B 고정 상태에서
-      // A의 위로 버튼을 눌러도 미리보기는 B 그대로다.
-      await rowA.getByRole('button', { name: 'Move up one' }).click({ timeout: 10000 })
       await expect(preview).toContainText(LONG_B.slice(0, 60))
       // 고정 항목 삭제: 미리보기가 자동으로 닫힌다.
       await rowB.getByRole('button', { name: 'Remove queued message' }).click({ timeout: 10000 })
