@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, ChevronUp, ChevronsUp, Clock, Minimize2, RotateCcw, Scissors, Trash2, X } from 'lucide-react'
 import { useMoveQueuedChat, useQueuedChats, useRemoveQueuedChat, useRetryQueuedChat, useSetQueuePaused } from '@/hooks/useChatQueue'
+import type { QueuedChat } from '@/api/chat-queue'
 import { markCancelledUntilNextSend } from '@/hooks/useOpenCode'
 import { API_BASE_URL } from '@/config'
 
@@ -50,12 +51,48 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   }
   const sendingItem = items.find((item) => item.status === 'sending')
   const failedItem = !sendingItem ? items.find((item) => item.status === 'failed') : undefined
+  // F1-3: 미리보기 (hover=일시 표시, click=고정). 고정 중에는 hover로 바뀌지 않는다.
+  const [pinnedId, setPinnedId] = useState<string | null>(null)
+  const [hoverId, setHoverId] = useState<string | null>(null)
   // failed 발생 시 자동 펼침 — minimized 고정이면 Retry 버튼을 못 찾아 먹통처럼 보인다.
   useEffect(() => {
     if (failedItem) setMinimized(false)
   }, [failedItem])
   // failed 항목은 목록에 남겨 X로 지울 수 있게 한다. sending만 제목으로 올린다.
   const restItems = sendingItem ? items.filter((item) => item.id !== sendingItem.id) : items
+  const allItems = sendingItem ? [sendingItem, ...restItems] : restItems
+  const previewItem: QueuedChat | null =
+    allItems.find((i) => i.id === pinnedId) ?? allItems.find((i) => i.id === hoverId) ?? null
+  // 고정·hover 항목이 발송·삭제되어 목록에서 빠지면 미리보기를 자동으로 닫는다.
+  useEffect(() => {
+    if (pinnedId != null && !allItems.some((i) => i.id === pinnedId)) setPinnedId(null)
+    if (hoverId != null && !allItems.some((i) => i.id === hoverId)) setHoverId(null)
+  })
+  // Escape(global-escape-close)이면 고정을 푼다.
+  useEffect(() => {
+    const h = (): void => {
+      setPinnedId(null)
+      setHoverId(null)
+    }
+    window.addEventListener('global-escape-close', h)
+    return () => window.removeEventListener('global-escape-close', h)
+  }, [])
+  const togglePin = (id: string): void => {
+    setPinnedId((prev) => (prev === id ? null : id))
+  }
+  const renderPreview = (item: QueuedChat): ReactNode => (
+    <div data-testid="queue-preview" className="mb-2 max-h-48 overflow-y-auto rounded-md border border-input bg-background/90 p-2">
+      <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+        <span className={`rounded px-1 py-px font-semibold ${item.status === 'failed' ? 'bg-destructive/15 text-destructive' : item.status === 'sending' ? 'bg-blue-500/15 text-blue-500' : 'bg-muted'}`}>
+          {item.status === 'sending' ? '전송 중' : item.status === 'failed' ? '실패' : '대기 중'}
+        </span>
+        {item.model && (
+          <span className="truncate">{item.model.providerID}/{item.model.modelID}</span>
+        )}
+      </div>
+      <div className="whitespace-pre-wrap break-words text-xs text-foreground">{item.text}</div>
+    </div>
+  )
   useEffect(() => {
     if (failedItem) {
       markCancelledUntilNextSend(sessionID)
@@ -102,13 +139,13 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   }
 
   if (items.length === 0) {
-    if (minimized) {
-      return (
-        <div className="w-full max-w-4xl px-4 pb-1 flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setMinimized(false)}
-            className={`inline-flex items-center justify-center gap-1 w-5 h-5 rounded-full border backdrop-blur-sm transition-colors ${paused ? 'bg-zinc-500/10 border-zinc-500/30 hover:bg-zinc-500/15' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 hover:bg-yellow-500/15' : 'border-border bg-background/90 hover:bg-muted'}`}
+  if (minimized) {
+    return (
+      <div className="w-full max-w-4xl px-4 pb-1 flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setMinimized(false)}
+          className={`inline-flex items-center justify-center gap-1 w-5 h-5 rounded-full border backdrop-blur-sm transition-colors ${paused ? 'bg-zinc-500/10 border-zinc-500/30 hover:bg-zinc-500/15' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 hover:bg-yellow-500/15' : 'border-border bg-background/90 hover:bg-muted'}`}
             title={paused ? 'Queue paused — click to expand' : 'Queue empty — click to expand'}
             aria-label="Expand queue"
           >
@@ -161,11 +198,15 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   }
 
   if (minimized) {
+    const miniItem = sendingItem ?? failedItem ?? restItems[0] ?? null
     return (
       <div className="w-full max-w-4xl px-4 pb-1">
+        {previewItem && renderPreview(previewItem)}
         <button
           type="button"
           onClick={() => setMinimized(false)}
+          onMouseEnter={() => { if (miniItem) setHoverId(miniItem.id) }}
+          onMouseLeave={() => setHoverId(null)}
           className={`inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${paused ? 'bg-zinc-500/10 border-zinc-500/30 text-zinc-400 hover:bg-zinc-500/15' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/15' : 'bg-muted/40 text-muted-foreground hover:bg-muted'}`}
           title="Expand queue"
         >
@@ -198,9 +239,18 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
   return (
     <div className="w-full max-w-4xl px-4 pb-1">
       <div className={`rounded-lg border px-3 py-2 text-xs ${paused ? 'bg-zinc-500/10 border-zinc-500/30' : allowInterrupt ? 'bg-yellow-500/8 border-yellow-500/20' : 'bg-muted/40'}`}>
+        {previewItem && renderPreview(previewItem)}
         <ul className="space-y-1">
           {sendingItem && (
-            <li key={sendingItem.id} className="group flex items-center gap-2">
+            <li
+              key={sendingItem.id}
+              data-testid="queue-row"
+              data-item-id={sendingItem.id}
+              className="group flex items-center gap-2 cursor-pointer"
+              onMouseEnter={() => setHoverId(sendingItem.id)}
+              onMouseLeave={() => setHoverId(null)}
+              onClick={() => togglePin(sendingItem.id)}
+            >
               <span className="shrink-0 text-muted-foreground">→</span>
               <span className="min-w-0 flex-1 truncate break-words opacity-60">
                 {sendingItem.text}
@@ -213,7 +263,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
                   aria-label="Cancel sending message"
                   title="Cancel sending (발송 취소)"
                   className="rounded p-0.5 text-muted-foreground opacity-80 transition-opacity hover:opacity-100 hover:text-destructive"
-                  onClick={() => removeChat.mutate({ sessionID, id: sendingItem.id })}
+                  onClick={(e) => { e.stopPropagation(); removeChat.mutate({ sessionID, id: sendingItem.id }) }}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -221,7 +271,15 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
             </li>
           )}
           {restItems.map((item, index) => (
-            <li key={item.id} className="group flex items-center gap-2">
+            <li
+              key={item.id}
+              data-testid="queue-row"
+              data-item-id={item.id}
+              className="group flex items-center gap-2 cursor-pointer"
+              onMouseEnter={() => setHoverId(item.id)}
+              onMouseLeave={() => setHoverId(null)}
+              onClick={() => togglePin(item.id)}
+            >
               {item.kind === 'truncate' ? (
                 <span title="Truncate (queued op)"><Scissors className="h-3 w-3 shrink-0 text-amber-500" /></span>
               ) : item.kind === 'delete' ? (
@@ -244,7 +302,7 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
                     aria-label="Retry queued message"
                     title="Retry (queued로 되돌리고 재발송)"
                     className="rounded p-0.5 text-muted-foreground opacity-80 transition-opacity hover:opacity-100 hover:text-foreground"
-                    onClick={() => retryChat.mutate({ sessionID, id: item.id })}
+                    onClick={(e) => { e.stopPropagation(); retryChat.mutate({ sessionID, id: item.id }) }}
                   >
                     <RotateCcw className="h-3 w-3" />
                   </button>
@@ -254,8 +312,8 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
                   aria-label="Move to first"
                   title="Move to first"
                   disabled={index === 0}
-                  className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground disabled:pointer-events-none disabled:opacity-20"
-                  onClick={() => moveChat.mutate({ sessionID, id: item.id, toTop: true })}
+                    className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground disabled:pointer-events-none disabled:opacity-20"
+                    onClick={(e) => { e.stopPropagation(); moveChat.mutate({ sessionID, id: item.id, toTop: true }) }}
                 >
                   <ChevronsUp className="h-3 w-3" />
                 </button>
@@ -264,16 +322,16 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
                   aria-label="Move up one"
                   title="Move up one"
                   disabled={index === 0}
-                  className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground disabled:pointer-events-none disabled:opacity-20"
-                  onClick={() => moveChat.mutate({ sessionID, id: item.id, toTop: false })}
+                    className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-foreground disabled:pointer-events-none disabled:opacity-20"
+                    onClick={(e) => { e.stopPropagation(); moveChat.mutate({ sessionID, id: item.id, toTop: false }) }}
                 >
                   <ChevronUp className="h-3 w-3" />
                 </button>
                 <button
                   type="button"
                   aria-label="Remove queued message"
-                  className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-destructive"
-                  onClick={() => removeChat.mutate({ sessionID, id: item.id })}
+                    className="rounded p-0.5 text-muted-foreground opacity-60 transition-opacity hover:opacity-100 hover:text-destructive"
+                    onClick={(e) => { e.stopPropagation(); removeChat.mutate({ sessionID, id: item.id }) }}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -294,7 +352,13 @@ export function ChatQueueStrip({ sessionID, activityLabel }: ChatQueueStripProps
             <span className="shrink-0 rounded bg-zinc-500/20 px-1.5 py-px text-[10px] font-semibold">Paused</span>
           )}
           {sendingItem ? (
-            <span className="min-w-0 flex-1 truncate opacity-60">Sending... {sendingItem.text}</span>
+            <span
+              className="min-w-0 flex-1 truncate opacity-60"
+              onMouseEnter={() => setHoverId(sendingItem.id)}
+              onMouseLeave={() => setHoverId(null)}
+            >
+              Sending... {sendingItem.text}
+            </span>
           ) : failedItem ? (
             <span className="min-w-0 flex-1 truncate text-destructive">Failed to send — Retry or remove the item above</span>
           ) : paused ? (
