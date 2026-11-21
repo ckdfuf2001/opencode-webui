@@ -9,6 +9,7 @@ import { CancelledBadge } from "./CancelledBadge";
 import { API_BASE_URL } from "@/config";
 import { clearCancelledUntilNextSend } from "@/hooks/useOpenCode";
 import { useState, useEffect } from "react";
+import { useFaviconStatus } from "@/hooks/useFaviconStatus";
 
 interface Repo {
   id: number;
@@ -63,6 +64,8 @@ export function SessionDetailHeader({
 }: SessionDetailHeaderProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(sessionTitle);
+  // F1-4: 탭 파비콘을 헤더 배지와 같은 상태로 바꾼다 (타이머·폴링 없음).
+  useFaviconStatus({ isStreaming, isCancelled, pendingPermissions });
   const isWorking = isStreaming;
   // 취소 배지 수동 제거: 확인 팝업에서 제거하면 DB 플래그 + 메모리 유지분을 지우고
   // 헤더에서 숨긴다. 채팅 내용·실패 큐 항목은 그대로 (마지막 메시지 에러·실패 큐가
