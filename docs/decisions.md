@@ -1083,3 +1083,13 @@
 - 검증: U4 red→green (chromium, 5초 지연 하에서도 2초 내 행+헤더 전환).
   회귀 U1~U3 green. tsc clean.
 - red 원문: U4 `bg-blue-500` 2초 poll 실패 (`run-u4red.txt`).
+
+## D77 조회모드 xlsx/docx lib 리본 숨김 (2026-11-21)
+- 배경: 조회모드에서 xlsx/docx lib 리본 전체가 보였다 (pptx는 숨김).
+  코드는 예전부터 조회 표시였으나(xlsx e3e227e7의 "Insert/첨부 진입점" —
+  첨부탭은 조회에 숨겨져 근거 소멸), 사용자는 숨겨진 상태를 정상으로 본다.
+- 결정: pptx와 동일하게 `showToolbar={editing || narrowViewport}`로 통일
+  (모바일은 시트 이동용으로 유지). docx `WordEditor` + xlsx `SpreadsheetEditor`.
+- 검증: U5 red→green (chromium, 조회 숨김 + 편집탭 표시).
+  회귀 U1~U4 green. tsc clean.
+- red 원문: U5 `office-ui-ribbon` visible 2초 poll 실패.
