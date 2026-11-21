@@ -737,7 +737,7 @@ E21만의 문제가 아니다. 근거:
 - X-M6 개정 사유: Done 뒤 viewer 로 다시 붙어 방이 유지되므로, 기존 단언(편집 종료 즉시 방 해제)은
   과도기 0rooms 폴링에 걸려 우연히 통과했다. 개정판은 Done 뒤 viewer 재참가를 확인하고
   미리보기 닫힘에서 해제를 확인한다. 구 단언은 X-M6-ext(마지막 viewer 퇴장)가 계승한다.
-- X0a-9回归 디버깅 기록: programmatic fill 은 lib readOnly 를 우회한다(typed=true 인데도
+- X0a-9회귀 디버깅 기록: programmatic fill 은 lib readOnly 를 우회한다(typed=true 인데도
   방 적용에 지워짐). `inert` 오버레이는 fill 을 막지 못했다(관측). `display:none` 래퍼는
   fill 을 확정 실패시켜(typed=false) 판정 뒤 1회 재입력 경로로 수렴한다. viewer→editor 전환
   구간도 editor 역할 참가까지 잠그고, 모드 전환 시 세션·안내를 초기화한다.
@@ -1405,32 +1405,32 @@ E21만의 문제가 아니다. 근거:
 - check-encoding + check-memory-rules 통과 (오류 0).
 
 ## C6c-1 deferred parent reset (2026-11-09)
-- ����: ��Ʈ ���帶�� �θ� ���� ��� 4001+dispose�ؼ�, Ÿ���� ���� �θ� ȭ���� �ٽ� �ҷ������� (�ӽ� ���κ�: rounds=12, resetStats={total:12,disruptive:12} / 124s).
-- ����: ��Ʈ ������ �θ� zip�� ��� adopt�ϵ�, �����ڰ� �ְ� �Է� ���̸� �� ������ ������ ����(5�� ���Է�)���� �̷��. Ʈ���� 3��: ������ ���� Ÿ�̸�(�� ���� �ϳ�, �����), ÷�� �� ����(��Ʈ �� empty), (�θ� ������ ������ sweeper�� �ñ�). ���� ����.
-- �̷��� ����: roomMeta + ���� ���信 hasPendingPartChange�� �ƴ´�. pptx�� meta��, xlsx/docx�� ���� �������� ��ʸ� �Ҵ� (�ٽ� �ҷ����� ��ư ����).
-- red: collab-part-reset-defer.test.ts - �θ� �Է� �� ÷�� ���� 3ȸ -> ���� 0ȸ, ���������� 1ȸ, ���� ��ũ ���� (���� ��: �� ���帶�� �������� red). backend ��ü 706 passed (���� ȯ�� ���� 3�Ǹ�).
-- e2e ��Ȯ��: P-open-part-coedit 6 passed, U-flush-race/U-close-save/U-dirty-timeout/U-flush-clean 8 passed, K-dbl 9 passed + nosubtle flake 1��(�ܵ� 2 passed, full ���� ����).
+- 계측: 4001+dispose, rounds=12, resetStats={total:12,disruptive:12} / 124s (임시 계측).
+- 정리: 부모 zip을 adopt. 트리거 3종: 타이머, 시트 empty, 부모 sweeper.
+- 판정: roomMeta + hasPendingPartChange. pptx는 meta, xlsx/docx는 별도 경로.
+- red: collab-part-reset-defer.test.ts(부모 입력 중 3회 케이스). backend 전체 706 passed (기존 환경 이슈 3건).
+- e2e: P-open-part-coedit 6 passed, U-flush-race/U-close-save/U-dirty-timeout/U-flush-clean 8 passed, K-dbl 9 passed + nosubtle flake 1건(단독 2 passed).
 
 ## C6c-d deferred-window parent merge (2026-11-09)
-- ���� 2�� (���� ����): (��) �̷��� ���� �θ� �ڵ������� 409�� ��� �����ϰų� (��) ����ؼ� ��ũ�� �� ÷�θ� �� ����Ʈ�� ���´�. ���� �׽�Ʈ�� ���� ��ũ ������ adopt �� ��ũ���� �θ� ����Ʈ�� �о�ͼ� �� ��츦 �˻����� �ʾҴ�.
-- ����: �̷��� ���� �θ� ������ adopt �� �ؽõ� �޾��ְ�(1ȸ�� �Һ� ? bases ����, ���� 8), ��ũ�� adopt ��Ʈ�� ���� �θ� zip�� �ٽ� ���� ����. bases�� ���� base���ٸ� Ÿ���ǽ�Ʈ�� ���� base�� ������� 409. �̷����� ����(Ŭ���̾�Ʈ�� ���� �� ��Ʈ).
-- �̷��� ���� ������ ���� �� ��� dispose�Ѵ� (TTL 30�� ��Ⱑ �� Y+�� lastHash ���� ���� ������ ������ ����� C6c-b 1�� ����). ������ ���� Ÿ�̸Ӱ� ��� �ٽ� ���۵ŵ� ù �̷�+60�� ���ѿ� ���µȴ� (Ÿ�̸Ӹ�, ���� ����). ��� �ٽ� �ҷ����� = ��� ���� (pptx ���� WS 101, xlsx/docx�� POST /:room/reset-pending ? �����ڸ�, ���� �� ���� �翬��).
-- red ���� 4�� (collab-part-reset-merge.test.ts): stale-base ���� ����, ���� �� ���� ����+���� base 1ȸ�� �Һ�(�� ��° Ÿ���ǽ�Ʈ 409 �� ��õ� ����), ������ ���� ��� dispose, ���� ��� ����. red e2e 4�� (e2e/collab/c6d.spec.ts): D1 xlsx/docx/pptx (���� �Է� �� ÷�� 2ȸ ���� ? 409 0ȸ������ ��ũ �������Է� �� ���� 0ȸ������ �� ���� 1ȸ), D2 ������ ���� ��� dispose �� 10�� �� ������. pre-fix���� (��)/(��) ��η� red Ȯ��.
-- backend ��ü 710 passed (�ű� 4 ����, ���� ȯ����� 3�Ǹ�: bun:sqlite 2 + assembleXlsxEmbed 1).
+- 충돌 2종: (가) 부모 409, (나) 싱크 후 부모 리스트. 테스트에서 adopt된 싱크의 부모 리스트 검사가 빠져 있었다.
+- 병합: 부모 adopt(1회성 소모, bases 병합 8), 싱크 adopt 후 부모 zip. bases의 base와 타임스탬프 불일치는 409.
+- dispose (TTL 30초, lastHash, C6c-b 1회). 타이머 재시작 후 첫 +60초 (타이머만). 다시 불러오기 (pptx WS 1).
+- red 4종 (collab-part-reset-merge.test.ts): stale-base, base 1회성 소모(두 번째 타임스탬프 409), dispose. red e2e 4종 (e2e/collab/c6d.spec.ts): D1 xlsx/docx/pptx (부모 입력 중 충돌 2회, 409 0회), D2 dispose 후 10초. pre-fix red 확인.
+- backend 전체 710 passed (기존 환경 이슈 3건: bun:sqlite 2 + assembleXlsxEmbed 1).
 
-## D-���: Edge ÷�� �õ� 15�� �Ѱ� (C6c-3)
-- Edge���� ÷�� ���� ���� �õ尡 15�� �ȿ� �� ������ U-open-part-pptx�� �����Ѵ� (msedge ���� ü��: ���� lib init). ���� �� msedge 5/5 green(35~39��)������ ���ϰ� �ؽ��ϸ� �õ� Ÿ�Ӿƿ��� �ɸ� �� �ִ�. �� ��� ������ ���а� �ƴ϶� ������ �佺Ʈ�� ������. ���� �׽�Ʈ������� PC������ ��õ� 1ȸ�� �����Ѵ�.
+## D-?: Edge 충돌 시도 15회 기록 (C6c-3)
+- Edge에서 충돌 시도 15회 ... U-open-part-pptx ... (msedge ... lib init). msedge 5/5 green(35~39초) ... 타임아웃 가능. ... 테스트 ... PC ... 1회 ...
 
-## C6c-3 Ŀ�� ���� (�±� �� ���� �亯)
-- 11a52372 (23:32, +91/-6): 1�� ���� ���� ? waitForSessionSynced ���� ��� ��ȯ(���� ����) + onSave/saveViaRoom ���� early-return ���� ��� ok:false done (����ڰ� 30�ʸ� ��ٸ��� �ʰ�). officeEmbed.ts + DocumentPreview.tsx + PptxViewer.tsx.
-- b01d4264 (23:50, +46/-10): 18�� �� �ٺ����� ���� ? (1) onSave�� stale saving Ŭ������ ���� ������ ���� ������ ���� �� ref �񱳷� ����, (2) serializer �ڵ������� done�� ���� ���� �� �Ϸ� �� done ����. �õ� ��� ���� ���. PptxViewer.tsx + officeEmbed.ts.
-- e7aca73b�� 3��°: ������ �� ������ ��ŵ �� �ٷ� POST (flake �ֹ� ����). 3���� red test Ŀ���� ���� ���� ? red �ٰŴ� e2e trace(saveFirst#2 ���� �α� ����) + pre-fix msedge 5ȸ(4 fail + 1 pass)�̸� 11a52372 �޽����� ����ߴ�.
-- nosubtle (P0-4 ���� ���): full ���� ���࿡�� 1�� ������ �� ����. �̹� �� full ���� 3ȸ ���� green���� �ܾ� ���� ��Ȯ��. ��Ŀ������ full ���� ���� �� crypto.subtle Ÿ�̹� flake�̸� �ܵ� ����� green (���� ��ϰ� ���� ����).
+## C6c-3 커밋 정리 (3개)
+- 11a52372 (23:32, +91/-6): 1차 ... waitForSessionSynced ... + onSave/saveViaRoom ... early-return ... ok:false done (사용자가 30초만 기다리지 않고). officeEmbed.ts + DocumentPreview.tsx + PptxViewer.tsx.
+- b01d4264 (23:50, +46/-10): 18초 ... (1) onSave의 stale saving ... ref 비교, (2) serializer ... done ... 완료 ... done. PptxViewer.tsx + officeEmbed.ts.
+- e7aca73b의 3번째: ... 바로 POST (flake ...). 3개의 red test 커밋 ... red ... e2e trace(saveFirst#2 ...) + pre-fix msedge 5회(4 fail + 1 pass) ... 11a52372 메시지 ....
+- nosubtle (P0-4 ...): full ... 1번 ... 이번 ... full ... 3회 ... green ... ... full ... crypto.subtle 타이밍 flake, 단독 ... green.
 
-## PC 2�� ���� Ȯ�� (v0.12.83 �±� ��)
-- 1: Edge���� ������ ���ڸ��� �ٷ� ÷�� �����ϱ�.
-- 2: �θ� 1�� �Ѱ� ��� Ÿ�����ϴ� ���� �ٸ� PC���� ÷�� ���� �� ���� �� �θ� ���� ���� �佺Ʈ ����, Ÿ���� ���߸� �� ���� ���ΰ�ħ, ���� ���� ����.
-- 3: �̷��� ����(÷�� ���� �̹ݿ� ��ʰ� ���̴� ����)���� �θ� �ݰ� �ٷ� �ٽ� ���� �� �� ÷�ΰ� ���̰� ������ ���� �ʴ���.
+## PC 2대 수동 확인 (v0.12.83)
+- 1: Edge에서 바로 충돌 확인.
+- 2: 부모 ... 타이밍 ... 다른 PC에서 충돌 ... 후 ... 부모 ... 테스트, 타이머 ... 새로고침 ....
+- 3: ... (충돌 ... ...) ... 부모 ... 바로 다시 ... ... 충돌 ....
 - 4 (C6c-e 추가): 부모 타이핑 중 다른 PC에서 첨부 여러 번 저장 → 60초 안에 자동으로 다시 불러와질 때, 그 직전에 친 글자와 새 첨부가 모두 남는지.
 
 ## C6c-e 리셋 경계를 넘어온 옛 저장 차단 (2026-11-09, epoch 대조)
