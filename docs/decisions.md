@@ -1093,7 +1093,7 @@
 - 검증: U5 red→green (chromium, 조회 숨김 + 편집탭 표시).
   회귀 U1~U4 green. tsc clean.
 - red 원문: U5 `office-ui-ribbon` visible 2초 poll 실패.
-## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
+## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
 - 배경: html은 텍스트로만 보여서 렌더 결과를 볼 수 없었다.
 - 결정: `[화면]/[소스]` 탭 (기본 화면). 화면은 `/api/html-view` iframe,
   `sandbox="allow-scripts allow-forms allow-popups"`에서
