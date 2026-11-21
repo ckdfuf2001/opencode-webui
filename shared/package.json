@@ -13,6 +13,7 @@
     "./lib/repoPath": "./src/lib/repoPath.ts",
     "./lib/editPath": "./src/lib/editPath.ts",
     "./lib/collab-presence": "./src/lib/collab-presence.ts",
+    "./lib/searchTurns": "./src/lib/searchTurns.ts",
     "./config/defaults": "./src/config/defaults.ts",
     "./config/env": "./src/config/env.ts",
     "./config/client": "./src/config/client.ts"
