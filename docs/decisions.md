@@ -1096,15 +1096,28 @@
 
 ## D79 F1-3 채팅 큐 전체보기 (2026-11-21)
 - 배경: 큐 행은 truncate 한 줄이라 전문을 볼 방법이 없었다.
-- 결정: 목록 위 미리보기 영역 (hover=일시, click=고정·다시 클릭 해제,
-  Escape 해제). 행 버튼은 전파 차단. 고정 항목 삭제 시 자동 닫힘.
+- 결정: 목록 위 미리보기 영역 (hover=일시, click=고정·다시 클릭 해제, Escape 해제).
+  행 버튼은 전파 차단. 고정 항목 삭제 시 자동 닫힘.
   sending 행·접힌 칩 hover에도 같은 미리보기 (접힌 칩 클릭은 기존 펼치기 유지).
 - 검증: Q3 red→green (chromium). 회귀: 큐 e2e 신설이라 기존 영향 없음.
   tsc clean.
 - red 원문: `queue-preview` testid 부재 (hover 후 5초 poll 실패).
-- 주의: e2e에서 pause 고정이 필요했다 — 리로드 시 strip 마운트 효과가
+- 주의: e2e에서 일시정지 고정이 필요했다 — 리로드 시 마운트 효과가
   localStorage 미러로 paused를 풀어 자동 발송되므로, 테스트는 localStorage에
   `queue-paused:<id>=1`을 먼저 박는다 (제품 동작이 아니라 테스트 하네스).
+
+## D80 F1-4 세션 상태 파비콘 (2026-11-21)
+- 배경: 탭 아이콘이 항상 기본이라 작업 중·승인 대기를 탭만 보고 알 수 없었다.
+- 결정: `useFaviconStatus` 훅 — 헤더 배지와 같은 판정
+  (승인 대기 > 작업 중 > 취소 > 평소)을 같은 값으로 받아 data URL로 교체.
+  타이머·점멸·폴링 없음 (상태 바뀔 때만 교체, 언마운트 시 복원).
+  `/edit/*`는 SessionDetailHeader를 안 쓰므로 기본 유지 (범위 제외).
+- 검증: 단위 8건 green (매핑+우선순위+색 토큰+script 부재).
+  e2e F4 red→green (chromium, /api/session-status 목으로 4상태 순환 + 이탈 복원).
+  회귀: U1~U4 영향 없음 (헤더 이외 호출 없음). tsc clean.
+- red 원문: 단위 import 실패 (모듈 부재) + e2e 훅 제거 시 working에서 href 불변.
+- 주의: `isCancelledBadge`는 메시지가 있어야 참이라 e2e에서 한 번 전송이
+  필요하다. e2e에 유효 모델이 있어 실제 전송·완료까지 기다린다.
 
 ## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
 - 배경: html은 텍스트로만 보여서 렌더 결과를 볼 수 없었다.
