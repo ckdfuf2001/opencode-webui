@@ -12,6 +12,7 @@ import { Loader2, Search, Check, RefreshCw, Trash2 } from "lucide-react";
 import {
   getProvidersWithModels,
   fetchProviderModels,
+  fetchProviderUpstreamIds,
   formatModelName,
   formatProviderName,
   invalidateProvidersCache,
@@ -107,7 +108,8 @@ export function ModelSelectDialog({
   }, [opcodeUrl, currentModel]);
 
   // F1-1: 헤더 새로고침 — 커스텀 provider 전부에 refresh, 실패는 토스트 후 계속.
-  // 성공할 때마다 provider별 모델 id 스냅샷을 서버 설정에 저장한다.
+  // 성공한 provider는 업스트림 id를 스냅샷으로 저장한다 (config에는 추가만
+  // 되므로 없어진 모델 판정은 업스트림 기준이어야 한다).
   const refreshAllProviders = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -116,13 +118,12 @@ export function ModelSelectDialog({
       const content = (cfg?.content ?? {}) as { provider?: Record<string, { options?: { baseURL?: string } }> };
       const customIds = Object.keys(content.provider ?? {});
       setCustomProviderIds(new Set(customIds));
-      const succeeded: string[] = [];
+      const upstreamById = new Map<string, string[]>();
       for (const pid of customIds) {
         const target = providers.find((p) => p.id === pid);
         const label = target ? formatProviderName(target) : pid;
         try {
-          await fetchProviderModels(pid);
-          succeeded.push(pid);
+          upstreamById.set(pid, await fetchProviderUpstreamIds(pid));
         } catch {
           showToast.error(`새로고침 실패: ${label}`, { duration: 4000 });
         }
@@ -133,13 +134,11 @@ export function ModelSelectDialog({
         fresh.map(async (p) => (p.models.length > 0 ? p : { ...p, models: await fetchProviderModels(p.id) })),
       );
       setProviders(filled);
-      // 스냅샷 저장 (성공한 provider만 갱신).
+      setUpstreamByProvider(upstreamById);
+      // 스냅샷 저장 (성공한 provider만 업스트림 id로 교체).
       const prev = (preferences?.modelSnapshots ?? {}) as Record<string, string[]>;
       const next: Record<string, string[]> = { ...prev };
-      for (const pid of succeeded) {
-        const cur = filled.find((p) => p.id === pid);
-        if (cur) next[pid] = cur.models.map((m) => m.id);
-      }
+      for (const [pid, ids] of upstreamById) next[pid] = ids;
       try {
         await updateSettingsAsync({ modelSnapshots: next } as Parameters<typeof updateSettingsAsync>[0]);
       } catch {
@@ -326,17 +325,21 @@ export function ModelSelectDialog({
     return capabilities;
   };
 
-  // F1-1: 스냅샷에는 있는데 이번 목록에 없는 모델 (provider별).
+  // F1-1: 이번 마운트에 새로고침한 업스트림 id (없으면 현재 목록으로 폴백).
+  const [upstreamByProvider, setUpstreamById] = useState<Map<string, string[]>>(new Map());
+  const setUpstreamByProvider = (m: Map<string, string[]>): void => setUpstreamById(new Map(m));
+
+  // F1-1: 스냅샷에는 있는데 업스트림(없으면 현재 목록)에 없는 모델 (provider별).
   const snapshots = (preferences?.modelSnapshots ?? {}) as Record<string, string[]>;
   const removedByProvider = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const p of providers) {
-      const ids = new Set(p.models.map((m) => m.id));
-      const gone = (snapshots[p.id] ?? []).filter((id) => !ids.has(id));
+      const base = upstreamByProvider.get(p.id) ?? p.models.map((m) => m.id);
+      const gone = classifyModelSnapshot(snapshots[p.id] ?? [], base.map((id) => ({ id }))).removed;
       if (gone.length > 0) map.set(p.id, gone);
     }
     return map;
-  }, [providers, snapshots]);
+  }, [providers, snapshots, upstreamByProvider]);
   // F1-1: 사용 중이거나 기본값인 모델이 없어졌으면 맨 위에 경고 (resolveUsableModel과 같은 판정).
   const missingCurrent = currentModel && !modelExistsIn(providers, currentModel) ? currentModel : null;
 

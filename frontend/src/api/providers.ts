@@ -241,6 +241,23 @@ export const providerCredentialsApi = {
 };
 
 /**
+ * F1-1: refresh 응답의 업스트림 id 목록을 그대로 돌려준다. config에는
+ * 추가만 되므로 없어진 모델 감지에 필요하다.
+ */
+export async function fetchProviderUpstreamIds(providerId: string): Promise<string[]> {
+  try {
+    const { data } = await axios.post(
+      `${API_BASE_URL}/api/settings/opencode-configs/default/providers/${encodeURIComponent(providerId)}/models/refresh`,
+    );
+    const ids = (data as { models?: unknown })?.models;
+    if (!Array.isArray(ids)) return [];
+    return [...new Set(ids.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * provider 의 모델 목록을 서버에 물어본다 (custom provider 용).
  * 백엔드가 config 의 baseURL + 저장된 키로 GET {baseURL}/models 를 호출해
  * **config 에 models 로 저장까지** 한다. opencode 는 커스텀 provider 의 models

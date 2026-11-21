@@ -424,7 +424,8 @@ export function createSettingsRoutes(db: Database) {
         { reloadOnly: true },
       )
       logger.info(`Refreshed models for provider '${providerId}': ${ids.length} available, ${added} newly persisted`)
-      return c.json({ success: true, count: ids.length, added, config: updated })
+      // F1-1: 없어진 모델 판정용 — 업스트림 전체 id도 돌려준다 (config에는 추가만 되므로 삭제 감지에 필요).
+      return c.json({ success: true, count: ids.length, added, models: ids, config: updated })
     } catch (error) {
       logger.error('Failed to refresh provider models:', error)
       return c.json({ error: 'Failed to refresh provider models' }, 500)
