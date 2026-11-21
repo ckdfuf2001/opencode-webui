@@ -340,8 +340,17 @@ export function ModelSelectDialog({
     }
     return map;
   }, [providers, snapshots, upstreamByProvider]);
-  // F1-1: 사용 중이거나 기본값인 모델이 없어졌으면 맨 위에 경고 (resolveUsableModel과 같은 판정).
-  const missingCurrent = currentModel && !modelExistsIn(providers, currentModel) ? currentModel : null;
+  // F1-1: 사용 중이거나 기본값인 모델이 없어졌으면 맨 위에 경고.
+  // 제공 중지 행에 있거나 목록에 없으면 경고 (resolveUsableModel과 같은 판정 기준).
+  const missingCurrent = (() => {
+    if (!currentModel) return null
+    const slash = currentModel.indexOf("/")
+    if (slash > 0) {
+      const removedIds = removedByProvider.get(currentModel.slice(0, slash)) ?? []
+      if (removedIds.includes(currentModel.slice(slash + 1))) return currentModel
+    }
+    return modelExistsIn(providers, currentModel) ? null : currentModel
+  })()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
