@@ -171,4 +171,42 @@ test.describe('UI 개편 (U1~U3)', () => {
       await ctx.close().catch(() => {})
     }
   })
+
+  test('U5: 조회모드 xlsx/docx lib 리본 숨김 + 편집탭 표시', async ({ browser }: { browser: Browser }) => {
+    const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await seedUser(ctx, ADA)
+    const page = await ctx.newPage()
+    try {
+      await gotoApp(page)
+      await page.getByTitle('Workspace').click({ timeout: 20000 })
+      await page.waitForFunction(() => document.querySelectorAll('[data-testid="file-row"]').length > 0, null, { timeout: 30000 })
+      // 폴더 펼치기 (M9/6절 하네스 복구).
+      for (let i = 0; i < 6; i++) {
+        const has = await page.evaluate(
+          (n) => [...document.querySelectorAll('[data-testid="file-row"]')].some((r) => ((r.textContent || '').includes(n))),
+          'probe-seeded-before-server.xlsx',
+        )
+        if (has) break
+        const folder = page.locator('[data-testid="file-row"][data-path$="collab-e2e"]').first()
+        if (await folder.count()) await folder.locator('span', { hasText: 'collab-e2e' }).first().click({ timeout: 10000 }).catch(() => {})
+        await page.waitForTimeout(1000)
+      }
+      // xlsx 조회: lib 로드 후 리본이 없어야 한다 (pptx와 동일).
+      const rowX = page.locator('[data-testid="file-row"][data-path$="probe-seeded-before-server.xlsx"]')
+      await rowX.locator('span', { hasText: 'probe-seeded-before-server.xlsx' }).first().click({ timeout: 20000 })
+      await page.locator('xlsx-editor').first().waitFor({ timeout: 60000 })
+      await expect(page.locator('office-ui-ribbon').first()).toBeHidden({ timeout: 5000 })
+      // 편집탭에서는 리본이 보인다.
+      const [editor] = await Promise.all([
+        page.waitForEvent('popup', { timeout: 15000 }),
+        page.getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20000 }),
+      ])
+      await editor.waitForLoadState('domcontentloaded', { timeout: 30000 })
+      await editor.locator('xlsx-editor').first().waitFor({ timeout: 60000 })
+      await expect(editor.locator('office-ui-ribbon').first()).toBeVisible({ timeout: 15000 })
+      await editor.close()
+    } finally {
+      await ctx.close().catch(() => {})
+    }
+  })
 })
