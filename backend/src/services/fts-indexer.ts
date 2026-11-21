@@ -237,6 +237,76 @@ export interface MessageSearchHit {
   turnIndex: number
   ts: number
   snippet: string
+  /** F1-2: 이 턴의 사용자 메시지 (응답에서 일치해도 턴을 보여주기 위함). */
+  turnUser?: TurnRef | null
+  /** F1-2: 이 턴의 마지막 assistant 응답 (클릭 펼침용, 서버 조회 없음). */
+  turnLast?: TurnRef | null
+}
+
+export interface TurnRef {
+  messageId: string
+  role: string
+  text: string
+}
+
+/**
+ * F1-2: 히트마다 턴의 사용자 메시지와 마지막 assistant 응답을 붙인다.
+ * 턴 = 사용자 메시지부터 다음 사용자 메시지 전까지 (turnSelection과 같은 규칙).
+ * 같은 턴은 캐시로 묶어 쿼리를 아낀다.
+ */
+export function attachTurnRefs(db: Database, hits: MessageSearchHit[]): MessageSearchHit[] {
+  const userCache = new Map<string, TurnRef | null>()
+  const userTiCache = new Map<string, number>()
+  const lastCache = new Map<string, TurnRef | null>()
+  for (const h of hits) {
+    if (h.turnIndex == null) continue
+    const userKey = `${h.sessionId}\n${h.turnIndex}`
+    let user = userCache.get(userKey)
+    if (user === undefined) {
+      const row = db
+        .query(
+          `SELECT message_id AS m, role AS r, text AS tx, turn_index AS ti FROM session_messages_fts
+           WHERE session_id = ? AND role = 'user' AND turn_index <= ?
+           ORDER BY turn_index DESC LIMIT 1`,
+        )
+        .get(h.sessionId, h.turnIndex) as { m: string; r: string; tx: string; ti: number } | undefined
+      user = row ? { messageId: row.m, role: row.r, text: row.tx } : null
+      userCache.set(userKey, user)
+      if (row) userTiCache.set(userKey, row.ti)
+    }
+    h.turnUser = user ?? undefined
+    if (!user) continue
+    const userTi = userTiCache.get(userKey) ?? h.turnIndex
+    const nextUser = db
+      .query(
+        `SELECT MIN(turn_index) AS nti FROM session_messages_fts
+         WHERE session_id = ? AND role = 'user' AND turn_index > ?`,
+      )
+      .get(h.sessionId, userTi) as { nti: number | null } | undefined
+    const lastKey = `${h.sessionId}\n${userTi}\n${nextUser?.nti ?? ''}`
+    let last = lastCache.get(lastKey)
+    if (last === undefined) {
+      const row = nextUser?.nti != null
+        ? (db
+            .query(
+              `SELECT message_id AS m, role AS r, text AS tx FROM session_messages_fts
+               WHERE session_id = ? AND role = 'assistant' AND turn_index > ? AND turn_index < ?
+               ORDER BY turn_index DESC LIMIT 1`,
+            )
+            .get(h.sessionId, userTi, nextUser.nti) as { m: string; r: string; tx: string } | undefined)
+        : (db
+            .query(
+              `SELECT message_id AS m, role AS r, text AS tx FROM session_messages_fts
+               WHERE session_id = ? AND role = 'assistant' AND turn_index > ?
+               ORDER BY turn_index DESC LIMIT 1`,
+            )
+            .get(h.sessionId, userTi) as { m: string; r: string; tx: string } | undefined)
+      last = row ? { messageId: row.m, role: row.r, text: row.tx } : null
+      lastCache.set(lastKey, last)
+    }
+    h.turnLast = last ?? undefined
+  }
+  return hits
 }
 
 

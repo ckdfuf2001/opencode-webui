@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite'
-import { searchMessages } from './fts-indexer'
+import { searchMessages, attachTurnRefs, type TurnRef } from './fts-indexer'
 import { searchCommits } from './git-indexer'
 
 export interface RecallOptions {
@@ -46,6 +46,10 @@ export interface RecallHit {
   ts?: number
   sha?: string
   role?: string
+  /** F1-2: 이 턴의 사용자 메시지 (응답에서 일치해도 턴을 보여준다). */
+  turnUser?: TurnRef | null
+  /** F1-2: 이 턴의 마지막 assistant 응답 (클릭 펼침용). */
+  turnLast?: TurnRef | null
 }
 
 /**
@@ -84,7 +88,8 @@ export function buildRecall(
   if (opts.includeMessages !== false) {
     const msgs = searchMessagesUnion(db, q, want, { repoId: opts.repoId })
     msgMore = msgs.length > offset + perKind
-    for (const m of msgs.slice(offset, offset + perKind)) {
+    const page = attachTurnRefs(db, msgs.slice(offset, offset + perKind))
+    for (const m of page) {
       hits.push({
         kind: 'message',
         snippet: m.snippet.replace(/\[|\]/g, ''),
@@ -95,6 +100,8 @@ export function buildRecall(
         turnIndex: m.turnIndex,
         ts: m.ts,
         role: m.role,
+        turnUser: m.turnUser ?? undefined,
+        turnLast: m.turnLast ?? undefined,
       })
     }
   }

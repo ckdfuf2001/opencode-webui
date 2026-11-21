@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { Database } from 'bun:sqlite'
 import {
   searchMessages,
+  attachTurnRefs,
   countMessageMatches,
   expandMessage,
   indexAllSessions,
@@ -47,7 +48,7 @@ export function createSearchRoutes(db: Database) {
         repoId: repoId != null && !Number.isNaN(repoId) ? repoId : undefined,
         sessionId,
       }
-      const hits = searchMessages(db, (parsed.q || '').slice(0, MAX_SEARCH_Q), opts)
+      const hits = attachTurnRefs(db, searchMessages(db, (parsed.q || '').slice(0, MAX_SEARCH_Q), opts))
       const total = countMessageMatches(db, (parsed.q || '').slice(0, MAX_SEARCH_Q), opts)
       const offset = parsed.offset ?? 0
       return c.json({ hits, total, hasMore: offset + hits.length < total })
