@@ -1093,6 +1093,17 @@
 - 검증: U5 red→green (chromium, 조회 숨김 + 편집탭 표시).
   회귀 U1~U4 green. tsc clean.
 - red 원문: U5 `office-ui-ribbon` visible 2초 poll 실패.
+## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
+- 배경: html은 텍스트로만 보여서 렌더 결과를 볼 수 없었다.
+- 결정: `[화면]/[소스]` 탭 (기본 화면). 화면은 `/api/html-view` iframe,
+  `sandbox="allow-scripts allow-forms allow-popups"`에서
+  `allow-same-origin` 제외 (앱 API 같은 출처 호출 차단).
+  소스는 기존 텍스트 뷰어. 탭 기억은 `localStorage html-preview-tab`.
+  상대 리소스는 `<base href="/api/html-view/asset/...">`로 해결됨을 확인
+  (서버 수정 없음 — 0단계에서 base 주입 + 에셋 라우트 동작 확인).
+- 검증: H5 red→green. red 초반은 테스트 하네스 문제였고(행 탐색·에셋 경로),
+  진짜 red는 iframe 부재였다. 회귀: xlsx 미리보기에 탭 없음.
+  tsc clean.
 
 ## D79 F1-3 채팅 큐 전체보기 (2026-11-21)
 - 배경: 큐 행은 truncate 한 줄이라 전문을 볼 방법이 없었다.
@@ -1119,14 +1130,21 @@
 - 주의: `isCancelledBadge`는 메시지가 있어야 참이라 e2e에서 한 번 전송이
   필요하다. e2e에 유효 모델이 있어 실제 전송·완료까지 기다린다.
 
-## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
-- 배경: html은 텍스트로만 보여서 렌더 결과를 볼 수 없었다.
-- 결정: `[화면]/[소스]` 탭 (기본 화면). 화면은 `/api/html-view` iframe,
-  `sandbox="allow-scripts allow-forms allow-popups"`에서
-  `allow-same-origin` 제외 (앱 API 같은 출처 호출 차단).
-  소스는 기존 텍스트 뷰어. 탭 기억은 `localStorage html-preview-tab`.
-  상대 리소스는 `<base href="/api/html-view/asset/...">`로 해결됨을 확인
-  (서버 수정 없음 — 0단계에서 base 주입 + 에셋 라우트 동작 확인).
-- 검증: H5 red→green. red 초반은 테스트 하네스 문제였고(행 탐색·에셋 경로),
-  진짜 red는 iframe 부재였다. 회귀: xlsx 미리보기에 탭 없음.
-  tsc clean.
+## D81 F1-1 모델 새로고침 + 없어진 모델 (2026-11-21)
+- 배경: 모델 목록 새로고침 수단이 없고, 없어진 모델이 조용히 사라졌다.
+- 결정(1): 헤더 새로고침 버튼 (진행 중 스피너, 중복 클릭 무시).
+  커스텀 provider 전부에 refresh 호출, 실패는 토스트 후 계속.
+- 결정(2): 성공할 때마다 provider별 모델 id 스냅샷을 서버 설정에 저장
+  (`modelSnapshots`, shared 스키마 + backend 검증 통과).
+  스냅샷은 합집합으로 누적한다 (덮어쓰면 제거 판정이 증발한다).
+- 결정(3): 스냅샷에는 있는데 업스트림에 없는 모델은 회색 행 + `--` +
+  "제공 중지" 배지, 선택 불가. refresh 응답에 `models: ids`를 추가했다
+  (config에는 추가만 되므로 제거 감지에 필요).
+- 결정(4): 없어진 행만 삭제 가능. 커스텀은 config에서 models 항목 삭제
+  (PUT 전체 content), 카탈로그는 스냅샷에서만 삭제. 사용 중이면 2단계 확인.
+- 결정(5): 사용 중/기본값 모델이 제공 중지 행에 있거나 목록에 없으면
+  맨 위에 경고 (resolveUsableModel과 같은 판정 기준).
+- 검증: 단위 4건 green + e2e F1 red→green (chromium, stub /models +
+  DB 직접 provider 등록 — HTTP 등록은 opencode를 재시작시켜 e2e가 깨진다).
+  회귀: U1~U4·H5·Q3·F4 green 유지. tsc clean.
+- red 원문: 단위 import 실패 + e2e refresh 버튼 부재 + removed 행 부재.
