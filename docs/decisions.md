@@ -1148,3 +1148,30 @@
   DB 직접 provider 등록 — HTTP 등록은 opencode를 재시작시켜 e2e가 깨진다).
   회귀: U1~U4·H5·Q3·F4 green 유지. tsc clean.
 - red 원문: 단위 import 실패 + e2e refresh 버튼 부재 + removed 행 부재.
+
+## D82 F1-2 검색 3단계 펼침 (2026-11-21)
+- 배경: 검색 결과가 낱개 메시지 나열이라 턴 맥락이 안 보였다.
+  검색어가 응답에만 있으면 어떤 턴인지 알 수 없었다.
+- 결정(1): backend `attachTurnRefs` — hit마다 `turnUser`(턴 주인)와
+  `turnLast`(마지막 assistant 응답)를 붙인다 (user→다음 user 경계,
+  turnSelection과 같은 규칙). `/messages`와 recall에 연결.
+- 결정(2): `shared/src/lib/searchTurns.ts` — 턴 그룹화 공용 구현
+  (`groupSearchHits`, `isResponseHit`). 단위 4건 green.
+- 결정(3): `SessionJumpDialog` 3단계 — 0단계 사용자 행만
+  (+응답에서 일치 배지), 1단계 마지막 응답 펼침 (`turnLast`, 서버 조회
+  없음), 2단계 `/messages/expand` 1회 + 턴 캐시 (`detailCache`).
+- 결정(4): 상세는 사용자 메시지부터 다음 사용자 전까지 자른다
+  (히트 최소 turnIndex가 아니라 `turnUser` 기준 — 응답에만 일치해도
+  사용자 행이 상세에 포함된다).
+- 검증: 단위 4건 green + e2e F2 red→green (chromium+msedge).
+  tsc clean, eslint 0 errors (기존 exhaustive-deps warning 3 유지),
+  encoding clean.
+- red 원문: `jump-turn-row` 30초 미노출 + "No messages found".
+  trace: GET#1 `hits:1` (turnUser/turnLast 포함) → reindex `indexed:0` →
+  GET#2 `hits:[]`. 원인: 다이얼로그 진입 reindex의
+  `syncSessionMessages` (`DELETE NOT IN oc.message`)가 하네스 시드를
+  지웠다. 서버 응답 시점에는 정상이었고 프론트 매핑도 정상이었다.
+- 주의: e2e는 reindex를 먼저 round-trip drain한 뒤 시드한다 (같은 세션은
+  60초 fresh라 재실행 없음). 제품 코드는 그대로 둔다. node 호환 sqlite
+  환경에서 reindex가 실패할 수 있어 하네스가 FTS에 직접 INSERT한다.
+  reindex 실패 자체는 이번에 고치지 않음 (게이트와 엮이면 D82에 근거).
