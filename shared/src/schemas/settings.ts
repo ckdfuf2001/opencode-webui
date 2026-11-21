@@ -73,6 +73,9 @@ export const UserPreferencesSchema = z.object({
   // 취소(Stop) 시 대기 중인 큐 전송도 함께 멈출지. 기본 false = 큐는 계속 발송.
   // true면 Stop이 큐를 일시정지하고, 사용자가 재생 버튼으로 재개해야 한다.
   cancelStopsQueue: z.boolean().default(false),
+  // F1-1: provider별 모델 id 스냅샷 (새로고침 직후 목록). 없어진 모델
+  // 판정·"제공 중지" 표시에 쓴다. 기기가 달라도 같아야 해서 로컬이 아닌 서버 설정에 둔다.
+  modelSnapshots: z.record(z.string(), z.array(z.string())).default({}),
 });
 
 export const DEFAULT_TTS_CONFIG = {
@@ -104,6 +107,7 @@ export const DEFAULT_USER_PREFERENCES = {
   pushNotificationEnabled: false,
   pushNotificationDuration: 0,
   sseStreaming: false,
+  modelSnapshots: {},
 };
 
 export const SettingsResponseSchema = z.object({

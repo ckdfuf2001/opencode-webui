@@ -54,6 +54,8 @@ export interface UserPreferences {
   sseStreaming?: boolean
   /** 취소(Stop) 시 대기 중인 큐 전송도 멈출지. 기본 false = 큐는 계속 발송. */
   cancelStopsQueue?: boolean
+  /** F1-1 snapshot */
+  modelSnapshots?: Record<string, string[]>;
 }
 
 export interface SettingsResponse {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,13 +8,17 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Search, Check } from "lucide-react";
+import { Loader2, Search, Check, RefreshCw, Trash2 } from "lucide-react";
 import {
   getProvidersWithModels,
   fetchProviderModels,
   formatModelName,
   formatProviderName,
+  invalidateProvidersCache,
+  modelExistsIn,
 } from "@/api/providers";
+import { classifyModelSnapshot } from "@/lib/modelSnapshots";
+import { settingsApi } from "@/api/settings";
 import { useSettings } from "@/hooks/useSettings";
 import { getSessionModelOverride, setSessionModelOverride } from "@/lib/sessionModelOverride";
 import { useOpenCodeClient, useSession } from "@/hooks/useOpenCode";
@@ -44,9 +48,14 @@ export function ModelSelectDialog({
 }: ModelSelectDialogProps) {
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   const [useAsDefault, setUseAsDefault] = useState(false);
+  // F1-1: config에 있는 provider id 집합 (커스텀 판정용).
+  const [customProviderIds, setCustomProviderIds] = useState<Set<string>>(new Set());
+  // F1-1: 삭제 2단계 확인 중인 "provider/model".
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
   const { preferences, updateSettingsAsync } = useSettings();
   const client = useOpenCodeClient(opcodeUrl, directory);
   const queryClient = useQueryClient();
@@ -77,6 +86,14 @@ export function ModelSelectDialog({
         data.map(async (p) => (p.models.length > 0 ? p : { ...p, models: await fetchProviderModels(p.id) })),
       );
       setProviders(filled);
+      // F1-1: 커스텀 판정용 config provider 목록.
+      try {
+        const cfg = await settingsApi.getDefaultOpenCodeConfig();
+        const ids = Object.keys((cfg?.content as { provider?: Record<string, unknown> } | undefined)?.provider ?? {});
+        setCustomProviderIds(new Set(ids));
+      } catch {
+        /* 무시 */
+      }
 
       if (currentModel) {
         const [providerId] = currentModel.split("/");
@@ -88,6 +105,85 @@ export function ModelSelectDialog({
       setLoading(false);
     }
   }, [opcodeUrl, currentModel]);
+
+  // F1-1: 헤더 새로고침 — 커스텀 provider 전부에 refresh, 실패는 토스트 후 계속.
+  // 성공할 때마다 provider별 모델 id 스냅샷을 서버 설정에 저장한다.
+  const refreshAllProviders = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const cfg = await settingsApi.getDefaultOpenCodeConfig().catch(() => null);
+      const content = (cfg?.content ?? {}) as { provider?: Record<string, { options?: { baseURL?: string } }> };
+      const customIds = Object.keys(content.provider ?? {});
+      setCustomProviderIds(new Set(customIds));
+      const succeeded: string[] = [];
+      for (const pid of customIds) {
+        const target = providers.find((p) => p.id === pid);
+        const label = target ? formatProviderName(target) : pid;
+        try {
+          await fetchProviderModels(pid);
+          succeeded.push(pid);
+        } catch {
+          showToast.error(`새로고침 실패: ${label}`, { duration: 4000 });
+        }
+      }
+      invalidateProvidersCache();
+      const fresh = await getProvidersWithModels();
+      const filled = await Promise.all(
+        fresh.map(async (p) => (p.models.length > 0 ? p : { ...p, models: await fetchProviderModels(p.id) })),
+      );
+      setProviders(filled);
+      // 스냅샷 저장 (성공한 provider만 갱신).
+      const prev = (preferences?.modelSnapshots ?? {}) as Record<string, string[]>;
+      const next: Record<string, string[]> = { ...prev };
+      for (const pid of succeeded) {
+        const cur = filled.find((p) => p.id === pid);
+        if (cur) next[pid] = cur.models.map((m) => m.id);
+      }
+      try {
+        await updateSettingsAsync({ modelSnapshots: next } as Parameters<typeof updateSettingsAsync>[0]);
+      } catch {
+        /* 스냅샷 저장 실패는 조용히 (목록은 이미 갱신됨) */
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, providers, preferences, updateSettingsAsync]);
+
+  // F1-1: 없어진 모델 삭제. 커스텀은 config 에서 지우고, 카탈로그는 스냅샷에서만 지운다.
+  const deleteRemovedModel = useCallback(async (providerId: string, modelId: string) => {
+    const isCustom = customProviderIds.has(providerId);
+    if (isCustom) {
+      const cfg = await settingsApi.getDefaultOpenCodeConfig();
+      if (!cfg) {
+        showToast.error("설정을 불러오지 못했습니다");
+        return;
+      }
+      const content = (cfg.content ?? {}) as { provider?: Record<string, { models?: Record<string, unknown> }> };
+      const entry = content.provider?.[providerId];
+      if (entry?.models && modelId in entry.models) {
+        const { [modelId]: _removed, ...rest } = entry.models;
+        await settingsApi.updateOpenCodeConfig("default", {
+          content: {
+            ...content,
+            provider: { ...(content.provider ?? {}), [providerId]: { ...entry, models: rest } },
+          },
+        } as Parameters<typeof settingsApi.updateOpenCodeConfig>[1]);
+      }
+    }
+    // 스냅샷에서도 지운다 (두 경로 공통).
+    const prev = (preferences?.modelSnapshots ?? {}) as Record<string, string[]>;
+    const cur = prev[providerId] ?? [];
+    const next = { ...prev, [providerId]: cur.filter((id) => id !== modelId) };
+    try {
+      await updateSettingsAsync({ modelSnapshots: next } as Parameters<typeof updateSettingsAsync>[0]);
+    } catch {
+      /* 무시 */
+    }
+    invalidateProvidersCache();
+    await loadProviders();
+    setConfirmDeleteKey(null);
+  }, [customProviderIds, preferences, updateSettingsAsync, loadProviders]);
 
   useEffect(() => {
     if (open) {
@@ -230,13 +326,46 @@ export function ModelSelectDialog({
     return capabilities;
   };
 
+  // F1-1: 스냅샷에는 있는데 이번 목록에 없는 모델 (provider별).
+  const snapshots = (preferences?.modelSnapshots ?? {}) as Record<string, string[]>;
+  const removedByProvider = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const p of providers) {
+      const ids = new Set(p.models.map((m) => m.id));
+      const gone = (snapshots[p.id] ?? []).filter((id) => !ids.has(id));
+      if (gone.length > 0) map.set(p.id, gone);
+    }
+    return map;
+  }, [providers, snapshots]);
+  // F1-1: 사용 중이거나 기본값인 모델이 없어졌으면 맨 위에 경고 (resolveUsableModel과 같은 판정).
+  const missingCurrent = currentModel && !modelExistsIn(providers, currentModel) ? currentModel : null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl h-[80vh] max-h-[85vh] flex flex-col overflow-hidden bg-[#1a1a1a] border-[#333] text-white">
         <DialogHeader className="shrink-0">
-          <DialogTitle className="text-xl font-semibold">
-            Select Model
-          </DialogTitle>
+          <div className="flex items-center justify-between gap-2">
+            <DialogTitle className="text-xl font-semibold">
+              Select Model
+            </DialogTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="model-refresh-all"
+              title="모델 목록 새로고침 (커스텀 provider)"
+              onClick={() => void refreshAllProviders()}
+              disabled={refreshing}
+              className="bg-[#2a2a2a] border-[#333] text-zinc-200 hover:bg-[#333]"
+            >
+              <RefreshCw className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+              새로고침
+            </Button>
+          </div>
+          {missingCurrent && (
+            <div data-testid="model-removed-warning" className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              사용 중인 모델 {missingCurrent} 이(가) 제공 중지되었습니다. 다른 모델을 선택하세요.
+            </div>
+          )}
         </DialogHeader>
 
         <div className="flex flex-col flex-1 min-h-0 space-y-4 overflow-hidden">
@@ -377,6 +506,54 @@ export function ModelSelectDialog({
                                   )}
                                 </div>
                               </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {/* F1-1: 없어진 모델 — 회색 행, 메타는 --, 선택 불가, 삭제만 가능. */}
+                      {(removedByProvider.get(provider.id) ?? []).map((removedId) => {
+                        const confirmKey = `${provider.id}/${removedId}`;
+                        const confirming = confirmDeleteKey === confirmKey;
+                        const inUse = currentModel === confirmKey;
+                        return (
+                          <div
+                            key={`removed-${removedId}`}
+                            data-testid="model-row-removed"
+                            className="p-3 rounded-lg border border-[#333] bg-[#111] opacity-60"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="font-medium text-zinc-400">
+                                    {removedId}
+                                  </h4>
+                                  <Badge variant="outline" className="text-xs border-amber-500/40 text-amber-300">
+                                    제공 중지
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-zinc-500">메타 정보 없음 (--)</p>
+                              </div>
+                              {confirming ? (
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  data-testid="model-delete-confirm"
+                                  onClick={() => void deleteRemovedModel(provider.id, removedId)}
+                                  className="shrink-0"
+                                >
+                                  {inUse ? '사용 중 — 정말 삭제' : '삭제 확인'}
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  data-testid={`model-delete-${provider.id}-${removedId}`}
+                                  onClick={() => setConfirmDeleteKey(confirmKey)}
+                                  className="shrink-0 bg-[#2a2a2a] border-[#333] text-zinc-300 hover:bg-[#333]"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
                             </div>
                           </div>
                         );
