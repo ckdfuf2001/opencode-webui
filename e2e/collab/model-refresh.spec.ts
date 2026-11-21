@@ -80,13 +80,28 @@ test.describe('model refresh', () => {
       }
       await openDialog()
       const dialog = page.getByRole('dialog')
-      // 1차 새로고침: 둘 다 정상 행.
-      await dialog.getByTestId('model-refresh-all').click({ timeout: 10000 })
+      const doRefresh = async (): Promise<void> => {
+        // 진행 중인 새로고침이 있으면 클릭이 무시되므로 응답까지 대기한다.
+        const [resp] = await Promise.all([
+          page.waitForResponse(
+            (r) => r.url().includes('/f1stub/models/refresh') && r.request().method() === 'POST',
+            { timeout: 60000 },
+          ),
+          dialog.getByTestId('model-refresh-all').click({ timeout: 10000 }),
+        ])
+        expect(resp.ok(), 'refresh 200').toBe(true)
+      };
+      // 1차 새로고침: 둘 다 정상 행 + 스냅샷 저장.
+      await doRefresh()
       await expect(dialog.getByText('f1m1', { exact: true }).first()).toBeVisible({ timeout: 60000 })
       await expect(dialog.getByText('f1m2', { exact: true }).first()).toBeVisible({ timeout: 60000 })
+      await expect.poll(async () => {
+        const s = await page.request.get(`${backendBase()}/api/settings`).then((r) => r.json()).catch(() => null)
+        return (s as any)?.preferences?.modelSnapshots?.f1stub ?? null
+      }, { timeout: 30000, intervals: [1000] }).toEqual(['f1m1', 'f1m2'])
       // stub에서 f1m2 제거 후 2차 새로고침: -- 행 + 배지 + 경고.
       stubIds = ['f1m1']
-      await dialog.getByTestId('model-refresh-all').click({ timeout: 10000 })
+      await doRefresh()
       const removedRow = dialog.locator('[data-testid="model-row-removed"]', { hasText: 'f1m2' })
       await expect(removedRow).toBeVisible({ timeout: 60000 })
       await expect(removedRow).toContainText('--')
