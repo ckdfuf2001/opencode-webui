@@ -265,21 +265,19 @@ export function SessionJumpDialog({ open, onClose, sessionId, onJump }: SessionJ
     }
     const tu = turnUserOf(key)
     if (!tu) return
-    const groupHits = turnOf(key)
-    const userTi = Math.min(...groupHits.map((h) => h.turnIndex ?? 0))
     setDetailLoadingKey(key)
     try {
       const d = await expandMessage(tu.messageId, 20)
       const sorted = [...d.rows].sort((a, b) => a.turnIndex - b.turnIndex)
+      // 턴 사용자 메시지부터 다음 사용자 전까지가 한 턴이다.
+      // 히트 최소 turnIndex가 아니라 사용자 메시지 기준으로 자른다 —
+      // 검색어가 응답에만 있어도 사용자 행이 상세에 포함된다.
+      const startIdx = sorted.findIndex((r) => r.messageId === tu.messageId)
+      const from = startIdx >= 0 ? startIdx : 0
       const out: MessageExpandRow[] = []
-      let started = false
-      for (const r of sorted) {
-        if (!started) {
-          if (r.turnIndex < userTi) continue
-          started = true
-        } else if (r.turnIndex > userTi && r.role === 'user') {
-          break
-        }
+      for (let i = from; i < sorted.length; i++) {
+        const r = sorted[i]!
+        if (i > from && r.role === 'user') break
         out.push(r)
       }
       detailCache.current.set(key, out.length > 0 ? out : sorted)
