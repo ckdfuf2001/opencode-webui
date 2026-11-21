@@ -61,37 +61,26 @@ test.describe('session jump stages', () => {
       const sessionId = page.url().split('/').pop()!.split('?')[0]!
       await page.locator('textarea').first().waitFor({ timeout: 60000 })
       await openJumpDialog(page)
-      const seenUrls: string[] = []
-      page.on('request', (r) => {
-        if (r.url().includes('/api/search/messages') && r.method() === 'GET') seenUrls.push(r.url())
-      })
       const dialog = page.getByRole('dialog')
+      // 다이얼로그 진입 시 reindex가 FTS를 덮어쓴다 (하네스 시드가
+      // oc.message에 없어 DELETE NOT IN으로 지워지고 indexed:0).
+      // 직접 한 번 round-trip해서 끝낸 뒤 시드한다 — 같은 세션은
+      // 60초 fresh라 다이얼로그가 다시 실행하지 않는다.
+      await page.request.post(`${backendBase()}/api/search/messages/reindex`, {
+        data: { sessionId },
+        timeout: 60000,
+      })
       // 시드가 reindex와 경합할 수 있어 와일드카드로 가시성 확정 후 진행한다.
       // reindex가 뒤늦게 지울 수 있으니 2회 연속으로 확인한다.
       let stableHits = 0
       await expect.poll(async () => {
         await seedFts(sessionId)
         const all = (await page.request.get(`${backendBase()}/api/search/messages?q=*&sessionId=${encodeURIComponent(sessionId)}`).then((r) => r.json()).catch(() => ({ hits: [] }))) as { hits?: unknown[] }
-        const ui = (await page.request.get(`${backendBase()}/api/search/messages?q=${QUERY}&k=50&offset=0&sessionId=${encodeURIComponent(sessionId)}`).then((r) => r.json()).catch(() => ({ hits: [] }))) as { hits?: Array<{ messageId?: string }> }
-        console.log(`[f2] wild=${(all.hits ?? []).length} term=${(ui.hits ?? []).length}`)
         const n = (all.hits ?? []).length
         stableHits = n >= 3 ? stableHits + 1 : 0
         return stableHits
       }, { timeout: 90000, intervals: [2000] }).toBeGreaterThanOrEqual(2)
       await dialog.locator('input[placeholder*="Search"]').fill(QUERY)
-      const inBrowser = await page.evaluate(async ({ q, sid }) => {
-        try {
-          const r = await fetch(`/api/search/messages?q=${encodeURIComponent(q)}&k=50&offset=0&sessionId=${encodeURIComponent(sid)}`)
-          const j = await r.json()
-          return `status=${r.status} hits=${(j.hits ?? []).length}`
-        } catch (e) {
-          return 'ERR:' + String(e).slice(0, 120)
-        }
-      }, { q: QUERY, sid: sessionId })
-      console.log('[f2] in-browser=' + inBrowser)
-      await page.waitForTimeout(3000)
-      // eslint-disable-next-line no-console
-      console.log('[f2] ui-requests=' + JSON.stringify(seenUrls))
       const turnRow = dialog.getByTestId('jump-turn-row').first()
       await expect(turnRow).toBeVisible({ timeout: 30000 })
       // 0단계: 사용자 메시지만 보이고 "응답에서 일치" 배지가 있다.
