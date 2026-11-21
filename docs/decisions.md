@@ -1094,6 +1094,18 @@
   회귀 U1~U4 green. tsc clean.
 - red 원문: U5 `office-ui-ribbon` visible 2초 poll 실패.
 
+## D79 F1-3 채팅 큐 전체보기 (2026-11-21)
+- 배경: 큐 행은 truncate 한 줄이라 전문을 볼 방법이 없었다.
+- 결정: 목록 위 미리보기 영역 (hover=일시, click=고정·다시 클릭 해제,
+  Escape 해제). 행 버튼은 전파 차단. 고정 항목 삭제 시 자동 닫힘.
+  sending 행·접힌 칩 hover에도 같은 미리보기 (접힌 칩 클릭은 기존 펼치기 유지).
+- 검증: Q3 red→green (chromium). 회귀: 큐 e2e 신설이라 기존 영향 없음.
+  tsc clean.
+- red 원문: `queue-preview` testid 부재 (hover 후 5초 poll 실패).
+- 주의: e2e에서 pause 고정이 필요했다 — 리로드 시 strip 마운트 효과가
+  localStorage 미러로 paused를 풀어 자동 발송되므로, 테스트는 localStorage에
+  `queue-paused:<id>=1`을 먼저 박는다 (제품 동작이 아니라 테스트 하네스).
+
 ## D78 F1-5 HTML 미리보기 화면/소스 탭 (2026-11-21)
 - 배경: html은 텍스트로만 보여서 렌더 결과를 볼 수 없었다.
 - 결정: `[화면]/[소스]` 탭 (기본 화면). 화면은 `/api/html-view` iframe,
